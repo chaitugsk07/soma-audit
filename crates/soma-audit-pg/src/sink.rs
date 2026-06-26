@@ -146,7 +146,7 @@ impl LocalSink {
             id,
             seq_num,
             prev_hash.as_deref(),
-            1,
+            2,
             created_at,
             &*hmac_key,
         );

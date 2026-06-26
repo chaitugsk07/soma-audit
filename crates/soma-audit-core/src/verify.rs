@@ -36,6 +36,8 @@ pub fn verify_chain(records: &[AuditRecord], key: &[u8]) -> VerifyResult {
     let mut entries_checked: u64 = 0;
 
     for (i, record) in records.iter().enumerate() {
+        let metadata_json = serde_json::to_string(&record.event.metadata)
+            .unwrap_or_else(|_| "{}".to_owned());
         let canonical = canonical_msg(
             record.seq_num,
             record.event.tenant_id,
@@ -50,6 +52,7 @@ pub fn verify_chain(records: &[AuditRecord], key: &[u8]) -> VerifyResult {
             record.event.occurred_at,
             record.chain_epoch,
             record.prev_hash.as_deref(),
+            &metadata_json,
         );
         let expected_hash = compute_entry_hash(&canonical, key);
 

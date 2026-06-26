@@ -140,4 +140,83 @@ mod db {
             .await
             .expect("cleanup");
     }
+
+    /// A simulated delivery failure must:
+    ///   1. increment `attempts` by 1,
+    ///   2. set `last_error` to the supplied message,
+    ///   3. set `next_retry_at` strictly in the future (i.e. > now()).
+    ///
+    /// This test drives the same SQL the relay executes for `record_failure`
+    /// directly, verifying the exponential-backoff math without needing a live
+    /// central server.
+    #[tokio::test]
+    async fn failure_sets_backoff() {
+        let Some(pool) = try_pool().await else {
+            eprintln!("TEST_DATABASE_URL not set — skipping DB test");
+            return;
+        };
+
+        install_outbox(&pool).await.expect("install_outbox");
+
+        let sink = RemoteSink::new(pool.clone());
+        let event = make_event();
+        sink.enqueue(&event).await.expect("enqueue");
+
+        // Fetch the row id so we can target it.
+        let row_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM soma_audit_outbox.events WHERE event_id = $1",
+        )
+        .bind(event.idempotency_key)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch row id");
+
+        // Apply the same UPDATE the relay uses in record_failure (attempts=0 → 1).
+        sqlx::query(
+            "UPDATE soma_audit_outbox.events \
+             SET attempts = attempts + 1, \
+                 last_error = $2, \
+                 next_retry_at = now() + (interval '1 second' * LEAST(power(2, LEAST(attempts, 10))::int, 3600)) \
+             WHERE id = $1",
+        )
+        .bind(row_id)
+        .bind("connection refused")
+        .execute(&pool)
+        .await
+        .expect("record failure UPDATE");
+
+        // Verify the row reflects the failure correctly.
+        let (attempts, last_error, next_retry_at): (
+            i32,
+            Option<String>,
+            chrono::DateTime<chrono::Utc>,
+        ) = sqlx::query_as(
+            "SELECT attempts, last_error, next_retry_at \
+             FROM soma_audit_outbox.events WHERE id = $1",
+        )
+        .bind(row_id)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch row after failure");
+
+        assert_eq!(attempts, 1, "attempts must be incremented to 1");
+        assert_eq!(
+            last_error.as_deref(),
+            Some("connection refused"),
+            "last_error must be recorded"
+        );
+        // next_retry_at must be in the future (2^0 = 1 second from now, give or
+        // take scheduling jitter — just confirm it is strictly after now()).
+        assert!(
+            next_retry_at > chrono::Utc::now(),
+            "next_retry_at ({next_retry_at}) must be in the future"
+        );
+
+        // Cleanup.
+        sqlx::query("DELETE FROM soma_audit_outbox.events WHERE event_id = $1")
+            .bind(event.idempotency_key)
+            .execute(&pool)
+            .await
+            .expect("cleanup");
+    }
 }

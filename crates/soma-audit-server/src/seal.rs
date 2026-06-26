@@ -26,19 +26,31 @@ pub async fn run_seal_sweep(state: Arc<AppState>, pool: PgPool) {
 }
 
 async fn sweep_once(state: &AppState, pool: &PgPool) -> anyhow::Result<()> {
+    // BUG 1 fix: use DISTINCT ON to get the entry_hash OF the row with the
+    // highest seq_num per tenant, not MAX(entry_hash) which is a lexicographic
+    // max of a random hex string.
+    //
+    // BUG 2 fix: set soma_audit.bypass = 'on' so the maintenance_read RLS
+    // policy allows cross-tenant reads without a tenant GUC.
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL soma_audit.bypass = 'on'")
+        .execute(&mut *tx)
+        .await?;
     let tenants: Vec<(Uuid, i64, String)> = sqlx::query_as(
         r#"
-        SELECT e.tenant_id, MAX(e.seq_num) AS up_to_seq, MAX(e.entry_hash) AS chain_head_hash
+        SELECT DISTINCT ON (e.tenant_id)
+            e.tenant_id, e.seq_num AS up_to_seq, e.entry_hash AS chain_head_hash
         FROM soma_audit.fct_audit_events e
         WHERE NOT EXISTS (
             SELECT 1 FROM soma_audit.audit_chain_seals s
             WHERE s.tenant_id = e.tenant_id AND s.up_to_seq_num >= e.seq_num
         )
-        GROUP BY e.tenant_id
+        ORDER BY e.tenant_id, e.seq_num DESC
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     for (tenant_id, up_to_seq, chain_head_hash) in tenants {
         let sealed_at = Utc::now();

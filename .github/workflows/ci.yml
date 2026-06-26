@@ -1,0 +1,194 @@
+# CI pipeline for soma-audit
+#
+# MAINTAINER CHECKLIST — verify before this workflow is reliable:
+#
+# 1. SIBLING REPOS: This workflow checks out two sibling repos alongside
+#    soma-audit so path dependencies resolve on the runner:
+#      - chaitugsk07/soma-schema  → placed at ../soma-schema
+#      - chaitugsk07/soma-ui      → placed at ../soma-ui  (dashboard job only)
+#    Confirm these GitHub repo names are correct.
+#
+# 2. PRIVATE REPOS: If either sibling repo is private, the `actions/checkout`
+#    step for it will fail with a 404. Add a GitHub Personal Access Token (PAT)
+#    or a deploy key, then pass it via:
+#      token: ${{ secrets.SOMA_SCHEMA_READ_TOKEN }}
+#    (or use a shared bot token scoped to the relevant repos).
+#    Create the secret under Settings → Secrets and variables → Actions.
+#
+# 3. SOMA_SCHEMA REF: Steps below check out `main`. Adjust the `ref:` field
+#    if the default branch is named differently.
+#
+# 4. DATABASE URL: The Postgres service credentials below are baked in for CI.
+#    They are NOT secrets — they are ephemeral per-job containers. No changes
+#    needed unless you want a different DB name.
+
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1 — fmt, clippy, build, test (workspace + notes-app example)
+  # ---------------------------------------------------------------------------
+  test:
+    name: test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: soma
+          POSTGRES_PASSWORD: soma
+          POSTGRES_DB: soma_audit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U soma -d soma_audit_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      # 1. Check out soma-audit (this repo).
+      - name: Checkout soma-audit
+        uses: actions/checkout@v4
+        with:
+          path: soma-audit
+
+      # 2. Check out soma-schema as a sibling so `path = "../soma-schema"` resolves.
+      #    MAINTAINER: if soma-schema is private, add:  token: ${{ secrets.SOMA_SCHEMA_READ_TOKEN }}
+      - name: Checkout soma-schema (sibling path dep)
+        uses: actions/checkout@v4
+        with:
+          repository: chaitugsk07/soma-schema
+          ref: main
+          path: soma-schema
+          # token: ${{ secrets.SOMA_SCHEMA_READ_TOKEN }}
+
+      # 3. Install Rust stable with clippy + rustfmt.
+      #    wasm32 target is not needed for this job (dashboard has its own job).
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # 4. Cache Cargo registry + build artefacts.
+      #    The cache is keyed on the lock file so it invalidates on dep changes.
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: soma-audit
+
+      # 5. Format check (workspace).
+      - name: cargo fmt --check
+        working-directory: soma-audit
+        run: cargo fmt --all --check
+
+      # 6. Clippy (workspace, all targets, deny warnings).
+      - name: cargo clippy
+        working-directory: soma-audit
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # 7. Build (workspace).
+      - name: cargo build
+        working-directory: soma-audit
+        run: cargo build --workspace
+
+      # 8. Run tests (workspace) WITH a live Postgres so DB integration tests
+      #    actually execute instead of being skipped.
+      - name: cargo test
+        working-directory: soma-audit
+        env:
+          TEST_DATABASE_URL: postgres://soma:soma@localhost:5432/soma_audit_test
+        run: cargo test --workspace
+
+      # 9. Check the notes-app example (standalone crate, not a workspace member).
+      #    It depends on soma-audit-pg/core via path deps and on soma-schema
+      #    transitively — both resolve because we checked out the siblings above.
+      - name: cargo check (notes-app example)
+        working-directory: soma-audit
+        run: cargo check --manifest-path examples/notes-app/Cargo.toml
+
+  # ---------------------------------------------------------------------------
+  # Job 2 — Leptos dashboard (wasm32 compile via trunk)
+  #
+  # The dashboard has TWO sibling path deps that must both be present:
+  #   soma-schema  → ../soma-schema  (relative to repo root)
+  #   soma-ui      → ../../soma-ui   (relative to dashboard/, i.e. ../soma-ui from root)
+  #
+  # Both are checked out into the runner workspace at the correct relative paths.
+  #
+  # MAINTAINER: if soma-ui is private, add a token to its checkout step.
+  # If trunk build fails due to JS/Node tooling in soma-ui, set
+  # continue-on-error: true below and investigate locally.
+  # ---------------------------------------------------------------------------
+  dashboard:
+    name: dashboard
+    runs-on: ubuntu-latest
+    # Mark as best-effort in case soma-ui or trunk setup surfaces issues.
+    # Remove continue-on-error once dashboard builds reliably in CI.
+    continue-on-error: true
+
+    steps:
+      # 1. Check out soma-audit (this repo).
+      - name: Checkout soma-audit
+        uses: actions/checkout@v4
+        with:
+          path: soma-audit
+
+      # 2. Check out soma-schema as a sibling (path dep from workspace crates,
+      #    pulled in transitively by the dashboard via soma-audit-* crates —
+      #    but the dashboard's own Cargo.toml does not declare it directly).
+      #    Still needed if trunk resolves the full dep graph.
+      #    MAINTAINER: add token if private.
+      - name: Checkout soma-schema (sibling path dep)
+        uses: actions/checkout@v4
+        with:
+          repository: chaitugsk07/soma-schema
+          ref: main
+          path: soma-schema
+          # token: ${{ secrets.SOMA_SCHEMA_READ_TOKEN }}
+
+      # 3. Check out soma-ui as a sibling so `path = "../../soma-ui/..."` resolves.
+      #    From the runner workspace root:
+      #      soma-audit/dashboard/ sees ../../soma-ui  →  ../soma-ui from root  →  soma-ui/
+      #    MAINTAINER: if soma-ui is private, add:  token: ${{ secrets.SOMA_UI_READ_TOKEN }}
+      - name: Checkout soma-ui (sibling path dep for dashboard)
+        uses: actions/checkout@v4
+        with:
+          repository: chaitugsk07/soma-ui
+          ref: main
+          path: soma-ui
+          # token: ${{ secrets.SOMA_UI_READ_TOKEN }}
+
+      # 4. Install Rust stable with wasm32 target (required by Leptos/trunk).
+      - name: Install Rust stable + wasm32 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      # 5. Cache Cargo.
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: soma-audit/dashboard
+
+      # 6. Install trunk (Leptos build tool).
+      - name: Install trunk
+        uses: jetli/trunk-action@v0.5.0
+        with:
+          version: latest
+
+      # 7. Build the dashboard. trunk reads Trunk.toml + index.html from the
+      #    dashboard/ directory.
+      - name: trunk build (dashboard)
+        working-directory: soma-audit/dashboard
+        run: trunk build

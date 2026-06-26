@@ -1,14 +1,22 @@
 //! Hash-chain math for soma-audit.
 //!
-//! # Canonical message format (epoch 1)
+//! # Canonical message format
 //!
 //! Fields are joined with ASCII RS (0x1E), which cannot appear in any of the
 //! structured field values (UUIDs, IP addresses, RFC3339 timestamps, enum
-//! strings).  The fixed field order is:
+//! strings).
+//!
+//! ## Epoch 1 (13 fields — legacy, no metadata)
 //!
 //!   seq_num · tenant_id · source_service · event_type · actor_id ·
 //!   actor_role · resource_type · resource_id · outcome · actor_ip ·
 //!   occurred_at · chain_epoch · prev_hash
+//!
+//! ## Epoch 2 (14 fields — current, includes metadata)
+//!
+//!   seq_num · tenant_id · source_service · event_type · actor_id ·
+//!   actor_role · resource_type · resource_id · outcome · actor_ip ·
+//!   occurred_at · chain_epoch · prev_hash · metadata
 //!
 //! Changing this format requires bumping `chain_epoch` so old and new records
 //! can coexist in the same tenant without confusing the verifier.
@@ -36,8 +44,9 @@ fn outcome_str(o: Outcome) -> &'static str {
 
 /// Build the deterministic canonical message for a record.
 ///
-/// The format is versioned by `chain_epoch`.  Any future breaking change to
-/// field selection or ordering must be introduced under a new epoch value.
+/// The format is versioned by `chain_epoch`.  Epoch 1 uses 13 fields (no
+/// metadata); epoch 2 adds `metadata` as field 14.  Pass `metadata` as the
+/// JSON string of the event's metadata field; it is ignored for epoch 1.
 #[allow(clippy::too_many_arguments)]
 pub fn canonical_msg(
     seq_num: i64,
@@ -53,9 +62,11 @@ pub fn canonical_msg(
     occurred_at: DateTime<Utc>,
     chain_epoch: i32,
     prev_hash: Option<&str>,
+    metadata: &str,
 ) -> String {
-    let fields: [&str; 13] = [
-        // Using a fixed-size array makes the field count statically visible.
+    let sep = RS.to_string();
+    // Using fixed-size arrays makes the field count statically visible.
+    let fields_13: [&str; 13] = [
         &seq_num.to_string(),
         &tenant_id.to_string(),
         source_service,
@@ -70,7 +81,13 @@ pub fn canonical_msg(
         &chain_epoch.to_string(),
         prev_hash.unwrap_or(""),
     ];
-    fields.join(&RS.to_string())
+    if chain_epoch >= 2 {
+        // Epoch 2: append metadata as field 14.
+        format!("{}{sep}{metadata}", fields_13.join(&sep))
+    } else {
+        // Epoch 1: legacy 13-field format, metadata excluded.
+        fields_13.join(&sep)
+    }
 }
 
 /// HMAC-SHA256(`key`, `canonical`) → lowercase hex string.
@@ -101,6 +118,8 @@ pub fn seal_record(
     created_at: DateTime<Utc>,
     key: &[u8],
 ) -> AuditRecord {
+    let metadata_json =
+        serde_json::to_string(&event.metadata).unwrap_or_else(|_| "{}".to_owned());
     let canonical = canonical_msg(
         seq_num,
         event.tenant_id,
@@ -115,6 +134,7 @@ pub fn seal_record(
         event.occurred_at,
         chain_epoch,
         prev_hash,
+        &metadata_json,
     );
     let entry_hash = compute_entry_hash(&canonical, key);
 
@@ -209,5 +229,79 @@ mod tests {
         let result = crate::verify::verify_chain(&records, key_b);
         assert!(!result.ok);
         assert_eq!(result.first_broken_seq, Some(1));
+    }
+
+    // ── BUG 3 regression tests ────────────────────────────────────────────────
+
+    /// Two epoch-2 events that differ ONLY in metadata must produce different
+    /// entry_hashes (metadata is now part of the HMAC canonical message).
+    #[test]
+    fn test_metadata_changes_hash_epoch2() {
+        let tenant_id = Uuid::new_v4();
+        let key = b"test-key-32-bytes-padded-to-work!";
+
+        let mut event_a = make_event(tenant_id);
+        event_a.metadata = serde_json::json!({"action": "read"});
+
+        let mut event_b = make_event(tenant_id);
+        // Same event but different metadata value.
+        event_b.metadata = serde_json::json!({"action": "delete"});
+
+        let record_a = seal_record(&event_a, Uuid::new_v4(), 1, None, 2, Utc::now(), key);
+        let record_b = seal_record(&event_b, Uuid::new_v4(), 1, None, 2, Utc::now(), key);
+
+        // The two records must produce different hashes because metadata differs.
+        assert_ne!(
+            record_a.entry_hash, record_b.entry_hash,
+            "epoch-2 entry_hash must reflect metadata"
+        );
+    }
+
+    /// Epoch-1 records still verify correctly (backward compatibility): canonical_msg
+    /// with epoch=1 ignores metadata, so old records can be verified without it.
+    #[test]
+    fn test_epoch1_backward_compat() {
+        let tenant_id = Uuid::new_v4();
+        let key = b"test-key-32-bytes-padded-to-work!";
+
+        // Build a small epoch-1 chain.
+        let mut records = Vec::new();
+        for i in 1i64..=2 {
+            let mut event = make_event(tenant_id);
+            event.metadata = serde_json::json!({"ignored": true});
+            let prev_hash = records.last().map(|r: &AuditRecord| r.entry_hash.as_str());
+            let record = seal_record(&event, Uuid::new_v4(), i, prev_hash, 1, Utc::now(), key);
+            records.push(record);
+        }
+
+        // verify_chain must still pass for epoch-1 records (ignores metadata).
+        let result = crate::verify::verify_chain(&records, key);
+        assert!(result.ok, "epoch-1 chain must still verify correctly");
+        assert_eq!(result.entries_checked, 2);
+    }
+
+    /// Epoch-1 canonical_msg ignores metadata; epoch-2 includes it.  The same
+    /// metadata string must produce DIFFERENT messages across the two epochs.
+    #[test]
+    fn test_canonical_msg_epoch_branching() {
+        let tenant_id = Uuid::new_v4();
+        let now = Utc::now();
+        let metadata = r#"{"key":"value"}"#;
+
+        let msg1 = canonical_msg(
+            1, tenant_id, "svc", "evt", None, None, None, None,
+            Outcome::Success, None, now, 1, None, metadata,
+        );
+        let msg2 = canonical_msg(
+            1, tenant_id, "svc", "evt", None, None, None, None,
+            Outcome::Success, None, now, 2, None, metadata,
+        );
+
+        // Epoch 2 appends metadata; epoch 1 does not — they must differ.
+        assert_ne!(msg1, msg2, "epoch-1 and epoch-2 canonical msgs must differ");
+        // Epoch 2 message must contain the metadata string.
+        assert!(msg2.contains(metadata), "epoch-2 msg must include metadata");
+        // Epoch 1 message must NOT contain the metadata string.
+        assert!(!msg1.contains(metadata), "epoch-1 msg must not include metadata");
     }
 }
