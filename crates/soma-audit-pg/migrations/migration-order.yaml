@@ -1,0 +1,9 @@
+manifest_version: 1
+versions:
+  - version: 1
+    description: "Initial audit events table"
+    migrations:
+      - file: "20260626_01_audit-events.sql"
+        created: "2026-06-26"
+        author: "soma-audit"
+        why: "Create append-only HMAC-chained audit events table"

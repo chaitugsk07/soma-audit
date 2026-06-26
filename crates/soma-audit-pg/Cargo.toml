@@ -1,0 +1,24 @@
+[package]
+name = "soma-audit-pg"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+soma-audit-core = { path = "../soma-audit-core" }
+soma-schema = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+hkdf = { workspace = true }
+sha2 = { workspace = true }
+hmac = { workspace = true }
+ed25519-dalek = { workspace = true }
+zeroize = { workspace = true }
+thiserror = { workspace = true }
+include_dir = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

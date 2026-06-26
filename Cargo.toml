@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/soma-audit-core",
+    "crates/soma-audit-pg",
+]
+
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/chaitugsk07/soma-audit"
+authors = ["Chaitu Gaddek <dev@kreesalis.com>"]
+rust-version = "1.82"
+
+[workspace.dependencies]
+# Serialisation
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Identifiers / time
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Crypto
+hkdf = "0.12"
+sha2 = "0.10"
+hmac = "0.12"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+zeroize = { version = "1", features = ["derive"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "macros", "json", "ipnet"] }
+soma-schema = { path = "../soma-schema", default-features = false }
+include_dir = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# Error handling
+thiserror = "2"

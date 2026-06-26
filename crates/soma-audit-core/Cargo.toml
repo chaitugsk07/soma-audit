@@ -1,0 +1,21 @@
+[package]
+name = "soma-audit-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Pure zero-IO core types, chain math, and crypto for soma-audit."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+hkdf = { workspace = true }
+sha2 = { workspace = true }
+hmac = { workspace = true }
+ed25519-dalek = { workspace = true }
+zeroize = { workspace = true }
+thiserror = { workspace = true }
