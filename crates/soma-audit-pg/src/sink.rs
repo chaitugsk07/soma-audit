@@ -101,7 +101,14 @@ impl LocalSink {
         tx: &mut Transaction<'_, Postgres>,
     ) -> Result<AuditRecord, AuditPgError> {
         let mut stamped = event.clone();
-        stamped.source_service = self.source_service.clone();
+        // Stamp the sink's own service name only when the caller didn't supply one.
+        // The embedded case (an app auditing itself) leaves source_service empty and
+        // relies on this default. The central-ingest case forwards events that already
+        // carry the originating service's name, which MUST be preserved — it's the
+        // cross-service dimension. So only fill it in when absent.
+        if stamped.source_service.is_empty() {
+            stamped.source_service = self.source_service.clone();
+        }
 
         // Set tenant GUC (transaction-local)
         sqlx::query("SELECT set_config('soma_audit.tenant_id', $1::text, true)")
@@ -281,6 +288,10 @@ impl LocalSink {
             .collect::<Result<Vec<_>, AuditPgError>>()?;
 
         Ok((records, next_cursor))
+    }
+
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
     }
 
     /// Verify the HMAC chain for a tenant's audit log.

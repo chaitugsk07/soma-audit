@@ -1,0 +1,39 @@
+[package]
+name = "soma-audit-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Central audit ingestion and query server."
+
+[[bin]]
+name = "soma-audit-server"
+path = "src/main.rs"
+
+[dependencies]
+soma-audit-core = { path = "../soma-audit-core" }
+soma-audit-pg = { path = "../soma-audit-pg" }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tokio = { workspace = true }
+rust-embed = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+zeroize = { workspace = true }
+sha2 = { workspace = true }
+base64 = "0.22"
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }

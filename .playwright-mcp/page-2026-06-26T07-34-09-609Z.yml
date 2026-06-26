@@ -1,0 +1,50 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - generic [ref=e4]: soma-audit
+    - generic [ref=e5]:
+      - link "Audit Events" [ref=e6] [cursor=pointer]:
+        - /url: /audit
+        - img [ref=e7]
+        - generic [ref=e10]: Audit Events
+      - link "Verify" [ref=e11] [cursor=pointer]:
+        - /url: /verify
+        - img [ref=e12]
+        - generic [ref=e16]: Verify
+      - link "Seals" [ref=e17] [cursor=pointer]:
+        - /url: /seals
+        - img [ref=e18]
+        - generic [ref=e24]: Seals
+      - link "Keys" [ref=e25] [cursor=pointer]:
+        - /url: /keys
+        - img [ref=e26]
+        - generic [ref=e31]: Keys
+  - generic [ref=e32]:
+    - banner [ref=e33]:
+      - generic [ref=e34]:
+        - generic "Server reachable" [ref=e35]
+        - generic [ref=e36]: soma-audit
+      - generic [ref=e37]:
+        - textbox "tenant-id (UUID)" [ref=e39]: 11111111-1111-1111-1111-111111111111
+        - textbox "admin token" [ref=e41]: test-admin-token
+        - button "Switch to dark mode" [ref=e42] [cursor=pointer]:
+          - img [ref=e43]
+    - main [ref=e47]:
+      - generic [ref=e191]:
+        - generic [ref=e192]:
+          - generic [ref=e193]:
+            - heading "Signing Keys" [level=1] [ref=e194]
+            - paragraph [ref=e195]: Ed25519 public keys used to sign chain seals. Copy these for external verification.
+          - button "Load keys" [active] [ref=e197] [cursor=pointer]
+        - generic [ref=e199]:
+          - generic [ref=e200]:
+            - generic [ref=e201]:
+              - paragraph [ref=e202]: kid
+              - paragraph [ref=e203]: soma-audit-v1
+            - generic [ref=e204]:
+              - generic [ref=e205]: OKP
+              - generic [ref=e206]: Ed25519
+          - generic [ref=e207]:
+            - paragraph [ref=e208]: x (base64url public key)
+            - generic [ref=e209]:
+              - code [ref=e210]: 7Zj23JMm9dgCwcm_NhtPRCxtVdDspWSJlx_4aClXkxs
+              - button "Copy" [ref=e211] [cursor=pointer]

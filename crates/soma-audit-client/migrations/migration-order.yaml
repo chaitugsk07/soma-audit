@@ -1,0 +1,9 @@
+manifest_version: 1
+versions:
+  - version: 1
+    description: "Outbox table for durable remote relay"
+    migrations:
+      - file: "20260626_01_outbox.sql"
+        created: "2026-06-26"
+        author: "soma-audit-client"
+        why: "Create outbox table to durably buffer audit events before relay to the central server"

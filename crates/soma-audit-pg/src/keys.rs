@@ -45,7 +45,6 @@ impl AuditKeys {
         soma_audit_core::derive_tenant_hmac_key(&self.master_secret, tenant_id)
     }
 
-    #[allow(dead_code)]
     pub fn verifying_key(&self) -> ed25519_dalek::VerifyingKey {
         self.signing_key.verifying_key()
     }
@@ -53,6 +52,10 @@ impl AuditKeys {
     #[allow(dead_code)]
     pub(crate) fn signing_key(&self) -> &SigningKey {
         &self.signing_key
+    }
+
+    pub fn sign_seal(&self, payload: &[u8]) -> Vec<u8> {
+        soma_audit_core::sign_seal(&self.signing_key, payload)
     }
 }
 

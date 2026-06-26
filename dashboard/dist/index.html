@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>soma-audit</title>
+    <!-- Trunk replaces this link with the compiled WASM + JS bundle -->
+    
+<script type="module">
+import init, * as bindings from '/soma-audit-dashboard-db286fc3b3bb4b9b.js';
+const wasm = await init({ module_or_path: '/soma-audit-dashboard-db286fc3b3bb4b9b_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+  <link rel="modulepreload" href="/soma-audit-dashboard-db286fc3b3bb4b9b.js" crossorigin="anonymous" integrity="sha384-dj047kR3tvuKHhl1HqHZvfvomQdijK7SOm7UzvtFi2EIQjqPDIRIoyN3+7pA58JU"><link rel="preload" href="/soma-audit-dashboard-db286fc3b3bb4b9b_bg.wasm" crossorigin="anonymous" integrity="sha384-m1oRqAEinxdLSbe9sMXbQMvby8L9SXQi1lYs8bzgDQ93+wFXH0GFCvCsq9H1Z/90" as="fetch" type="application/wasm"></head>
+  <body></body>
+</html>
