@@ -1,7 +1,15 @@
 [package]
 name = "soma-audit-pg"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Postgres-backed local audit sink and schema installer for soma-audit: HMAC-chained, RLS-isolated event storage with automated migrations."
+keywords = ["audit", "postgres", "logging", "security", "tamper-evident"]
+categories = ["database", "cryptography"]
+readme = "README.md"
 
 [dependencies]
 soma-audit-core = { path = "../soma-audit-core" }

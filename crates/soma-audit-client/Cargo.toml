@@ -7,6 +7,9 @@ repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 description = "Remote sink for soma-audit: durable local outbox + background relay to a central soma-audit-server."
+keywords = ["audit", "logging", "postgres", "outbox", "tamper-evident"]
+categories = ["database", "asynchronous"]
+readme = "README.md"
 
 [dependencies]
 soma-audit-core = { path = "../soma-audit-core" }

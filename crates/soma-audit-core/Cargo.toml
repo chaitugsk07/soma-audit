@@ -7,6 +7,9 @@ rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Pure zero-IO core types, chain math, and crypto for soma-audit."
+keywords = ["audit", "logging", "postgres", "security", "tamper-evident"]
+categories = ["cryptography", "data-structures"]
+readme = "README.md"
 
 [dependencies]
 serde = { workspace = true }
