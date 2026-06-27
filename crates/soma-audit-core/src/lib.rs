@@ -22,7 +22,7 @@ pub mod verify;
 // Public API re-exports
 pub use error::{AuditError, Result};
 pub use event::{AuditEvent, AuditRecord, Outcome};
-pub use verify::VerifyResult;
+pub use verify::{ChainCursor, VerifyResult};
 
 pub use chain::{canonical_msg, compute_entry_hash, seal_record};
 pub use keys::derive_tenant_hmac_key;

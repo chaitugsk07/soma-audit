@@ -1,0 +1,38 @@
+# Dockerfile-adjacent .dockerignore for BuildKit (Docker 23.0+).
+# Used when building with:
+#   docker build -f soma-audit/deploy/Dockerfile -t soma-audit:dev .
+# from the soma-platform/ parent directory (the build context).
+#
+# For older Docker, copy this file to soma-platform/.dockerignore.
+
+# Rust build artifacts — largest exclusion by far.
+soma-audit/target/
+soma-schema/target/
+
+# dashboard/dist is intentionally INCLUDED: it is committed to the repo and
+# embedded into the server binary at compile time via rust-embed.
+# Do NOT exclude it here unless you add a trunk build stage to the Dockerfile.
+soma-audit/dashboard/target/
+
+# Git metadata.
+**/.git/
+**/.gitignore
+**/.gitattributes
+
+# Node / npm artifacts.
+**/node_modules/
+
+# OS / editor noise.
+**/.DS_Store
+**/*.swp
+**/*.swo
+**/.idea/
+**/.vscode/
+
+# Secrets and local env files — never bake into the build context.
+**/.env
+**/.env.*
+**/secrets/
+
+# Test output and screenshots.
+soma-audit/examples/*/target/

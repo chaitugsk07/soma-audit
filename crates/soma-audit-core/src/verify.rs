@@ -22,6 +22,71 @@ pub struct VerifyResult {
     pub first_broken_seq: Option<i64>,
 }
 
+/// The minimal context carried between consecutive records during streaming
+/// verification.  Holds only what is needed to check the next record.
+pub struct ChainCursor {
+    /// `seq_num` of the last successfully verified record.
+    pub seq_num: i64,
+    /// `entry_hash` of the last successfully verified record.
+    pub entry_hash: String,
+}
+
+/// Verify a single record against the previous chain position and the HMAC
+/// key.  Returns `Ok(())` when the record passes all three checks, or `Err`
+/// with the failing `seq_num`.
+///
+/// `prev` is `None` only for the very first record in a tenant chain.
+///
+/// This is the shared kernel used by both [`verify_chain`] (slice path) and
+/// the streaming pg verify (O(1) memory path).
+pub fn verify_record(record: &AuditRecord, prev: Option<&ChainCursor>, key: &[u8]) -> Result<(), i64> {
+    let metadata_json = serde_json::to_string(&record.event.metadata)
+        .unwrap_or_else(|_| "{}".to_owned());
+    let canonical = canonical_msg(
+        record.seq_num,
+        record.event.tenant_id,
+        &record.event.source_service,
+        &record.event.event_type,
+        record.event.actor_id,
+        record.event.actor_role.as_deref(),
+        record.event.resource_type.as_deref(),
+        record.event.resource_id.as_deref(),
+        record.event.outcome,
+        record.event.actor_ip,
+        record.event.occurred_at,
+        record.chain_epoch,
+        record.prev_hash.as_deref(),
+        &metadata_json,
+    );
+    let expected_hash = compute_entry_hash(&canonical, key);
+
+    // 1. HMAC integrity
+    if record.entry_hash != expected_hash {
+        return Err(record.seq_num);
+    }
+
+    match prev {
+        None => {
+            // 2a. First record must have no prev_hash.
+            if record.prev_hash.is_some() {
+                return Err(record.seq_num);
+            }
+        }
+        Some(p) => {
+            // 3. seq_num must be exactly prev + 1 (gap → deletion).
+            if record.seq_num != p.seq_num + 1 {
+                return Err(record.seq_num);
+            }
+            // 2b. prev_hash must point to the previous entry_hash.
+            if record.prev_hash.as_deref() != Some(p.entry_hash.as_str()) {
+                return Err(record.seq_num);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Verify the integrity of a slice of records for a **single tenant+epoch**,
 /// sorted ascending by `seq_num`.
 ///
@@ -34,68 +99,24 @@ pub struct VerifyResult {
 /// Stops at the first broken record and returns its `seq_num`.
 pub fn verify_chain(records: &[AuditRecord], key: &[u8]) -> VerifyResult {
     let mut entries_checked: u64 = 0;
+    let mut cursor: Option<ChainCursor> = None;
 
-    for (i, record) in records.iter().enumerate() {
-        let metadata_json = serde_json::to_string(&record.event.metadata)
-            .unwrap_or_else(|_| "{}".to_owned());
-        let canonical = canonical_msg(
-            record.seq_num,
-            record.event.tenant_id,
-            &record.event.source_service,
-            &record.event.event_type,
-            record.event.actor_id,
-            record.event.actor_role.as_deref(),
-            record.event.resource_type.as_deref(),
-            record.event.resource_id.as_deref(),
-            record.event.outcome,
-            record.event.actor_ip,
-            record.event.occurred_at,
-            record.chain_epoch,
-            record.prev_hash.as_deref(),
-            &metadata_json,
-        );
-        let expected_hash = compute_entry_hash(&canonical, key);
-
-        // 1. HMAC integrity
-        if record.entry_hash != expected_hash {
-            return VerifyResult {
-                ok: false,
-                entries_checked,
-                first_broken_seq: Some(record.seq_num),
-            };
-        }
-
-        if i == 0 {
-            // 2a. First record must have no prev_hash.
-            if record.prev_hash.is_some() {
+    for record in records.iter() {
+        match verify_record(record, cursor.as_ref(), key) {
+            Ok(()) => {}
+            Err(seq) => {
                 return VerifyResult {
                     ok: false,
                     entries_checked,
-                    first_broken_seq: Some(record.seq_num),
-                };
-            }
-        } else {
-            let prev = &records[i - 1];
-
-            // 3. seq_num must be exactly prev + 1 (gap → deletion).
-            if record.seq_num != prev.seq_num + 1 {
-                return VerifyResult {
-                    ok: false,
-                    entries_checked,
-                    first_broken_seq: Some(record.seq_num),
-                };
-            }
-
-            // 2b. prev_hash must point to the previous entry_hash.
-            if record.prev_hash.as_deref() != Some(prev.entry_hash.as_str()) {
-                return VerifyResult {
-                    ok: false,
-                    entries_checked,
-                    first_broken_seq: Some(record.seq_num),
+                    first_broken_seq: Some(seq),
                 };
             }
         }
 
+        cursor = Some(ChainCursor {
+            seq_num: record.seq_num,
+            entry_hash: record.entry_hash.clone(),
+        });
         entries_checked += 1;
     }
 
@@ -192,5 +213,24 @@ mod tests {
         // The HMAC will also fail because prev_hash is part of canonical_msg,
         // but the first failure is still at seq 2.
         assert_eq!(result.first_broken_seq, Some(2));
+    }
+
+    #[test]
+    fn test_verify_record_first_row_no_prev() {
+        let tenant_id = Uuid::new_v4();
+        let event = make_event(tenant_id);
+        let record = seal_record(&event, Uuid::new_v4(), 1, None, 1, Utc::now(), KEY);
+        assert!(verify_record(&record, None, KEY).is_ok());
+    }
+
+    #[test]
+    fn test_verify_record_first_row_spurious_prev_fails() {
+        let tenant_id = Uuid::new_v4();
+        let event = make_event(tenant_id);
+        // Seal with no prev_hash but then inject one to simulate tampering.
+        let mut record = seal_record(&event, Uuid::new_v4(), 1, None, 1, Utc::now(), KEY);
+        record.prev_hash = Some("deadbeef".repeat(8));
+        // HMAC check fails because the hash was computed without a prev_hash.
+        assert!(verify_record(&record, None, KEY).is_err());
     }
 }

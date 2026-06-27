@@ -16,4 +16,7 @@ pub enum AuditPgError {
     Core(#[from] soma_audit_core::AuditError),
     #[error("environment variable error: {0}")]
     Env(String),
+    /// A free-text field contained a forbidden control character (e.g. RS 0x1E).
+    #[error("invalid field: {0}")]
+    InvalidField(String),
 }

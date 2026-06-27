@@ -35,12 +35,14 @@ sha2 = "0.10"
 hmac = "0.12"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 zeroize = { version = "1", features = ["derive"] }
+subtle = "2"
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "macros", "json", "ipnet"] }
 soma-schema = { path = "../soma-schema", default-features = false }
 include_dir = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+futures = "0.3"
 
 # HTTP server + client
 axum = "0.8"

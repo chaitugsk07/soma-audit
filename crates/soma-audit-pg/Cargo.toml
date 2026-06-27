@@ -27,6 +27,7 @@ ed25519-dalek = { workspace = true }
 zeroize = { workspace = true }
 thiserror = { workspace = true }
 include_dir = { workspace = true }
+futures = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

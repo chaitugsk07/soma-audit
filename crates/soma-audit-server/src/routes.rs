@@ -1,13 +1,10 @@
 use axum::{
     extract::DefaultBodyLimit,
-    http::Method,
+    http::{HeaderName, HeaderValue, Method},
     routing::{get, post},
     Router,
 };
-use tower_http::{
-    cors::{Any, CorsLayer},
-    trace::TraceLayer,
-};
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{
     ingest::post_event,
@@ -17,11 +14,28 @@ use crate::{
     state::AppState,
 };
 
-pub fn router(state: AppState) -> Router {
-    let cors = CorsLayer::new()
+/// Build the CORS layer from a comma-separated allowlist of origins
+/// (from `SOMA_AUDIT_CORS_ORIGINS`). When the list is empty, no cross-origin
+/// requests are permitted — the admin portal is served same-origin from this
+/// binary, so no permissive CORS is needed by default. The ingest endpoint is
+/// service-to-service and never needs CORS. For production, the operator sets
+/// `SOMA_AUDIT_CORS_ORIGINS` to their external dashboard origin(s).
+pub fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
+    let origins: Vec<HeaderValue> = allowed_origins
+        .iter()
+        .filter_map(|o| HeaderValue::from_str(o).ok())
+        .collect();
+    CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers(Any)
-        .allow_origin(Any);
+        .allow_headers([
+            HeaderName::from_static("authorization"),
+            HeaderName::from_static("content-type"),
+        ])
+        .allow_origin(origins)
+}
+
+pub fn router(state: AppState, cors_origins: &[String]) -> Router {
+    let cors = cors_layer(cors_origins);
 
     Router::new()
         .route("/health", get(health))

@@ -2,11 +2,12 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use futures::TryStreamExt;
 use serde_json::Value as JsonValue;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-use soma_audit_core::{AuditEvent, AuditRecord, Outcome, VerifyResult};
+use soma_audit_core::{AuditEvent, AuditRecord, ChainCursor, Outcome, VerifyResult};
 
 use crate::error::AuditPgError;
 use crate::keys::{tenant_lock_key, AuditKeys};
@@ -108,6 +109,34 @@ impl LocalSink {
         // cross-service dimension. So only fill it in when absent.
         if stamped.source_service.is_empty() {
             stamped.source_service = self.source_service.clone();
+        }
+
+        // Defense-in-depth: reject the RS separator (0x1E) in free-text fields.
+        // The canonical chain message uses RS as a field delimiter; injecting it
+        // into a field value would shift boundaries and allow forging a colliding
+        // canonical hash.  The ingest HTTP boundary validates this for remote
+        // callers; this check guards the embedded (direct record_in_tx) path.
+        let has_rs = |s: &str| s.contains('\u{1e}');
+        for field in [
+            stamped.source_service.as_str(),
+            stamped.event_type.as_str(),
+        ] {
+            if has_rs(field) {
+                return Err(AuditPgError::InvalidField(
+                    "field contains forbidden control character (RS 0x1E)".into(),
+                ));
+            }
+        }
+        for opt in [
+            stamped.actor_role.as_deref(),
+            stamped.resource_type.as_deref(),
+            stamped.resource_id.as_deref(),
+        ] {
+            if opt.is_some_and(has_rs) {
+                return Err(AuditPgError::InvalidField(
+                    "field contains forbidden control character (RS 0x1E)".into(),
+                ));
+            }
         }
 
         // Set tenant GUC (transaction-local)
@@ -295,6 +324,10 @@ impl LocalSink {
     }
 
     /// Verify the HMAC chain for a tenant's audit log.
+    ///
+    /// Streams rows in `seq_num ASC` order and verifies incrementally, carrying
+    /// only the previous `(seq_num, entry_hash)` between rows.  This keeps
+    /// memory consumption O(1) regardless of the number of audit entries.
     pub async fn verify(&self, tenant_id: Uuid) -> Result<VerifyResult, AuditPgError> {
         let mut tx = self.pool.begin().await?;
 
@@ -303,7 +336,8 @@ impl LocalSink {
             .execute(&mut *tx)
             .await?;
 
-        let rows = sqlx::query_as::<_, PgAuditRow>(
+        let hmac_key = self.keys.hmac_key(tenant_id);
+        let mut stream = sqlx::query_as::<_, PgAuditRow>(
             "SELECT id, tenant_id, seq_num, source_service, event_type, actor_id, actor_role, \
              resource_type, resource_id, outcome, actor_ip, occurred_at, metadata, \
              prev_hash, entry_hash, chain_epoch, idempotency_key, created_at \
@@ -311,13 +345,39 @@ impl LocalSink {
              WHERE tenant_id = $1 ORDER BY seq_num ASC",
         )
         .bind(tenant_id)
-        .fetch_all(&mut *tx)
-        .await?;
+        .fetch(&mut *tx);
 
+        let mut entries_checked: u64 = 0;
+        let mut cursor: Option<ChainCursor> = None;
+
+        while let Some(row) = stream.try_next().await? {
+            let record = row_to_record(row)?;
+            match soma_audit_core::verify::verify_record(&record, cursor.as_ref(), &*hmac_key) {
+                Ok(()) => {}
+                Err(seq) => {
+                    drop(stream);
+                    tx.commit().await?;
+                    return Ok(VerifyResult {
+                        ok: false,
+                        entries_checked,
+                        first_broken_seq: Some(seq),
+                    });
+                }
+            }
+            cursor = Some(ChainCursor {
+                seq_num: record.seq_num,
+                entry_hash: record.entry_hash,
+            });
+            entries_checked += 1;
+        }
+
+        drop(stream);
         tx.commit().await?;
 
-        let records = rows.into_iter().map(row_to_record).collect::<Result<Vec<_>, _>>()?;
-        let hmac_key = self.keys.hmac_key(tenant_id);
-        Ok(soma_audit_core::verify::verify_chain(&records, &*hmac_key))
+        Ok(VerifyResult {
+            ok: true,
+            entries_checked,
+            first_broken_seq: None,
+        })
     }
 }

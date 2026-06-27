@@ -7,3 +7,10 @@ versions:
         created: "2026-06-26"
         author: "soma-audit"
         why: "Create append-only HMAC-chained audit events table"
+  - version: 2
+    description: "Chain-seal checkpoints"
+    migrations:
+      - file: "20260626_02_audit-chain-seals.sql"
+        created: "2026-06-26"
+        author: "soma-audit"
+        why: "Move audit_chain_seals from inline server DDL into a tracked migration"

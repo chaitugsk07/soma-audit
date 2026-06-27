@@ -39,6 +39,15 @@ struct IngestResponse {
     entry_hash: String,
 }
 
+/// Returns `true` if the string contains the ASCII Record Separator (0x1E).
+///
+/// The RS byte is used as the field delimiter in the canonical chain message.
+/// Allowing it in free-text fields would let a caller shift field boundaries
+/// and forge a colliding canonical message.
+fn has_rs(s: &str) -> bool {
+    s.contains('\u{1e}')
+}
+
 pub async fn post_event(
     State(state): State<AppState>,
     req: Request,
@@ -52,6 +61,22 @@ pub async fn post_event(
 
     let payload: IngestRequest = serde_json::from_slice(&bytes)
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    // Reject any free-text field containing the RS separator (0x1E).  The
+    // canonical chain message joins fields with RS; injecting it into a field
+    // value would shift field boundaries and allow forging a colliding hash.
+    let rs_err = ApiError::BadRequest("field contains forbidden control character".into());
+    if has_rs(&payload.source_service) || has_rs(&payload.event_type) {
+        return Err(rs_err);
+    }
+    if payload.actor_role.as_deref().is_some_and(has_rs)
+        || payload.resource_type.as_deref().is_some_and(has_rs)
+        || payload.resource_id.as_deref().is_some_and(has_rs)
+    {
+        return Err(ApiError::BadRequest(
+            "field contains forbidden control character".into(),
+        ));
+    }
 
     let event = AuditEvent {
         source_service: payload.source_service,

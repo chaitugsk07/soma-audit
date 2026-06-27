@@ -28,20 +28,6 @@ fn init_telemetry() {
     }
 }
 
-const SEALS_DDL: &str = r#"
-CREATE TABLE IF NOT EXISTS soma_audit.audit_chain_seals (
-    id              UUID PRIMARY KEY,
-    tenant_id       UUID NOT NULL,
-    up_to_seq_num   BIGINT NOT NULL,
-    chain_head_hash TEXT NOT NULL,
-    sealed_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    signature       BYTEA NOT NULL,
-    public_key_id   TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS audit_chain_seals_tenant_seq
-    ON soma_audit.audit_chain_seals(tenant_id, up_to_seq_num DESC);
-"#;
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_telemetry();
@@ -54,6 +40,15 @@ async fn main() -> anyhow::Result<()> {
     let admin_token =
         std::env::var("SOMA_AUDIT_ADMIN_TOKEN").context("SOMA_AUDIT_ADMIN_TOKEN required")?;
 
+    // Comma-separated allowlist of cross-origin dashboard origins. Empty by
+    // default — the bundled portal is same-origin, so no permissive CORS.
+    let cors_origins: Vec<String> = std::env::var("SOMA_AUDIT_CORS_ORIGINS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
     let keys = Arc::new(soma_audit_pg::AuditKeys::from_env()?);
 
     let pool = PgPoolOptions::new()
@@ -62,9 +57,9 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("failed to connect to database")?;
 
+    // install() runs all soma-audit-pg migrations: the audit events table (v1)
+    // and the chain-seals table (v2). Idempotent, advisory-locked.
     soma_audit_pg::install(&pool).await.context("schema install failed")?;
-
-    sqlx::raw_sql(SEALS_DDL).execute(&pool).await.context("seals DDL failed")?;
 
     let sink = Arc::new(soma_audit_pg::LocalSink::new(
         pool.clone(),
@@ -83,8 +78,8 @@ async fn main() -> anyhow::Result<()> {
     let sweep_pool = pool.clone();
     tokio::spawn(seal::run_seal_sweep(sweep_state, sweep_pool));
 
-    let app =
-        routes::router(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let app = routes::router(state, &cors_origins)
+        .into_make_service_with_connect_info::<std::net::SocketAddr>();
 
     let listener = TcpListener::bind(&bind_addr)
         .await
