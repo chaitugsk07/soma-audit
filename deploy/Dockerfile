@@ -87,7 +87,7 @@ COPY soma-schema/ /build/soma-schema/
 # crates/soma-audit-server/../../dashboard/dist (relative to the crate root).
 WORKDIR /build/soma-audit
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --release -p soma-audit-server
+    cargo build --release -p soma-audit-server --features embed-dashboard
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runtime

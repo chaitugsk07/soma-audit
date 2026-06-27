@@ -22,7 +22,7 @@ axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 tokio = { workspace = true }
-rust-embed = { workspace = true }
+rust-embed = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
@@ -38,6 +38,9 @@ zeroize = { workspace = true }
 sha2 = { workspace = true }
 subtle = { workspace = true }
 base64 = "0.22"
+
+[features]
+embed-dashboard = ["dep:rust-embed"]
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
