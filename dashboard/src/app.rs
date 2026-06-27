@@ -129,12 +129,8 @@ fn AppShell(children: Children) -> impl IntoView {
 #[component]
 pub fn App() -> impl IntoView {
     // Initialize from localStorage so token/tenant survive page reloads.
-    let token = RwSignal::new(
-        local_storage_get("soma_audit_token").unwrap_or_default(),
-    );
-    let tenant_id = RwSignal::new(
-        local_storage_get("soma_audit_tenant_id").unwrap_or_default(),
-    );
+    let token = RwSignal::new(local_storage_get("soma_audit_token").unwrap_or_default());
+    let tenant_id = RwSignal::new(local_storage_get("soma_audit_tenant_id").unwrap_or_default());
     provide_context(AppCtx { token, tenant_id });
 
     view! {

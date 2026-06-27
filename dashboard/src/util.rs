@@ -43,7 +43,11 @@ fn plural(n: i64, unit: &str) -> String {
 
 fn parse_iso_to_ms(iso: &str) -> Option<f64> {
     let ms = js_sys::Date::parse(iso);
-    if ms.is_nan() { None } else { Some(ms) }
+    if ms.is_nan() {
+        None
+    } else {
+        Some(ms)
+    }
 }
 
 /// Copy `text` to the clipboard. Sets `label` to "Copied!" for 2 seconds.

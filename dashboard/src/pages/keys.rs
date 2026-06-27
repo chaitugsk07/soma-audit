@@ -64,6 +64,7 @@ pub fn KeysPage() -> impl IntoView {
                     loaded.set(true);
                 }
                 Err(e) => {
+                    keys.set(vec![]);
                     load_err.set(Some((e.status, e.message)));
                     loaded.set(true);
                 }

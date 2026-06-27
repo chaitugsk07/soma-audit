@@ -21,19 +21,21 @@ pub fn VerifyPage() -> impl IntoView {
         let token = ctx.token.get();
         let tenant = ctx.tenant_id.get();
         if tenant.is_empty() {
-            result.set(Some(Err("Enter a tenant ID in the header first.".to_string())));
+            result.set(Some(Err(
+                "Enter a tenant ID in the header first.".to_string()
+            )));
             return;
         }
         verifying.set(true);
         result.set(None);
         leptos::task::spawn_local(async move {
-            let r = verify_chain(&token, &tenant)
-                .await
-                .map_err(|e| if e.status == 401 {
+            let r = verify_chain(&token, &tenant).await.map_err(|e| {
+                if e.status == 401 {
                     "Unauthorized — check your admin token.".to_string()
                 } else {
                     e.message
-                });
+                }
+            });
             result.set(Some(r));
             verifying.set(false);
         });
@@ -73,6 +75,16 @@ pub fn VerifyPage() -> impl IntoView {
             // Result
             {move || result.get().map(|r| match r {
                 Ok(v) => if v.ok {
+                    if v.entries_checked == 0 {
+                        view! {
+                            <Alert variant=AlertVariant::Info>
+                                <AlertTitle>"No chain yet"</AlertTitle>
+                                <AlertDescription>
+                                    "No audit events have been recorded for this tenant yet — nothing to verify."
+                                </AlertDescription>
+                            </Alert>
+                        }.into_any()
+                    } else {
                     view! {
                         <Alert variant=AlertVariant::Success>
                             <AlertTitle>
@@ -85,6 +97,7 @@ pub fn VerifyPage() -> impl IntoView {
                             </AlertDescription>
                         </Alert>
                     }.into_any()
+                    }
                 } else {
                     view! {
                         <Alert variant=AlertVariant::Destructive>

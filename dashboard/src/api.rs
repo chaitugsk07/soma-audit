@@ -33,7 +33,10 @@ async fn handle_response<T: DeserializeOwned>(
                     .map(|s| s.to_string())
             })
             .unwrap_or(body);
-        return Err(ApiError { status, message: msg });
+        return Err(ApiError {
+            status,
+            message: msg,
+        });
     }
     resp.json::<T>().await.map_err(|e| ApiError {
         status,
@@ -46,7 +49,10 @@ async fn get_json<T: DeserializeOwned>(path: &str, token: &str) -> Result<T, Api
         .header("Authorization", &format!("Bearer {}", token))
         .send()
         .await
-        .map_err(|e| ApiError { status: 0, message: e.to_string() })?;
+        .map_err(|e| ApiError {
+            status: 0,
+            message: e.to_string(),
+        })?;
     handle_response(resp).await
 }
 

@@ -20,17 +20,17 @@ fn health_dot(last_seen: &str) -> impl IntoView {
         }
     };
 
-    let (color, title) = if age_secs < 300.0 {
-        ("bg-green-500", "Healthy (seen < 5 min ago)")
+    let (hex, title) = if age_secs < 300.0 {
+        ("#22c55e", "Healthy (seen < 5 min ago)")
     } else if age_secs < 3600.0 {
-        ("bg-yellow-400", "Degraded (seen < 1 hr ago)")
+        ("#f59e0b", "Degraded (seen < 1 hr ago)")
     } else {
-        ("bg-red-500", "Stale (seen > 1 hr ago)")
+        ("#ef4444", "Stale (seen > 1 hr ago)")
     };
 
     view! {
         <span
-            class=format!("inline-block h-2.5 w-2.5 rounded-full {color}")
+            style=format!("display:inline-block;width:10px;height:10px;border-radius:9999px;background:{hex};")
             title=title
         />
     }
@@ -46,7 +46,10 @@ pub fn SourcesPage() -> impl IntoView {
     let loaded = RwSignal::new(false);
 
     let load = move || {
-        let token = ctx.token.get();
+        // Read untracked: `load` is only invoked from non-reactive contexts
+        // (Refresh click, the debounced task). The Effect below owns the
+        // reactive dependency on the token.
+        let token = ctx.token.get_untracked();
         loading.set(true);
         load_err.set(None);
         leptos::task::spawn_local(async move {
@@ -64,11 +67,22 @@ pub fn SourcesPage() -> impl IntoView {
         });
     };
 
-    // Auto-load on mount.
-    {
+    // Auto-load reactively: fires when token becomes non-empty (avoids 401 on first paint).
+    // Debounced 400 ms so rapid keystrokes don't hammer the API with partial-token requests.
+    Effect::new(move |_| {
+        let t = ctx.token.get();
+        if t.is_empty() {
+            return;
+        }
+        let token_at_trigger = t.clone();
         let load = load.clone();
-        leptos::task::spawn_local(async move { load(); });
-    }
+        leptos::task::spawn_local(async move {
+            gloo_timers::future::TimeoutFuture::new(400).await;
+            if ctx.token.get_untracked() == token_at_trigger {
+                load();
+            }
+        });
+    });
 
     let navigate = leptos_router::hooks::use_navigate();
 

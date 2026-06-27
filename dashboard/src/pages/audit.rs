@@ -36,7 +36,11 @@ fn event_type_badge(event_type: &str) -> impl IntoView {
 }
 
 fn short_id(id: &str) -> String {
-    if id.len() > 8 { format!("{}…", &id[..8]) } else { id.to_string() }
+    if id.len() > 8 {
+        format!("{}…", &id[..8])
+    } else {
+        id.to_string()
+    }
 }
 
 #[component]
@@ -55,18 +59,23 @@ pub fn AuditPage() -> impl IntoView {
     let initial_loaded = RwSignal::new(false);
 
     let load_events = move |append: bool| {
-        let token = ctx.token.get();
-        let tenant = ctx.tenant_id.get();
+        // Read untracked: `load_events` runs from non-reactive contexts (button
+        // clicks, the debounced task). The Effect below owns the reactive deps.
+        let token = ctx.token.get_untracked();
+        let tenant = ctx.tenant_id.get_untracked();
         if tenant.is_empty() {
-            load_err.set(Some((0, "Enter a tenant ID in the header to load events.".to_string())));
+            load_err.set(Some((
+                0,
+                "Enter a tenant ID in the header to load events.".to_string(),
+            )));
             initial_loaded.set(true);
             return;
         }
-        let et = event_type_filter.get();
-        let ss = source_service_filter.get();
-        let from = from_filter.get();
-        let to = to_filter.get();
-        let cur = if append { cursor.get() } else { None };
+        let et = event_type_filter.get_untracked();
+        let ss = source_service_filter.get_untracked();
+        let from = from_filter.get_untracked();
+        let to = to_filter.get_untracked();
+        let cur = if append { cursor.get_untracked() } else { None };
         loading.set(true);
         load_err.set(None);
         leptos::task::spawn_local(async move {
@@ -82,7 +91,10 @@ pub fn AuditPage() -> impl IntoView {
             )
             .await
             {
-                Ok(Page { items, next_cursor: nc }) => {
+                Ok(Page {
+                    items,
+                    next_cursor: nc,
+                }) => {
                     if append {
                         events.update(|v| v.extend(items));
                     } else {
@@ -108,6 +120,32 @@ pub fn AuditPage() -> impl IntoView {
         initial_loaded.set(false);
         load_events(false);
     };
+
+    // Auto-load when both token and tenant_id become non-empty (fixes no-token 401 on mount
+    // and auto-loads when navigating from Sources with a pre-filled tenant).
+    // Debounced 400 ms so rapid keystrokes don't fire real queries on every character.
+    Effect::new(move |_| {
+        let t = ctx.token.get();
+        let tenant = ctx.tenant_id.get();
+        if t.is_empty() || tenant.is_empty() {
+            return;
+        }
+        let token_at_trigger = t.clone();
+        let tenant_at_trigger = tenant.clone();
+        let load_events = load_events.clone();
+        leptos::task::spawn_local(async move {
+            gloo_timers::future::TimeoutFuture::new(400).await;
+            if ctx.token.get_untracked() == token_at_trigger
+                && ctx.tenant_id.get_untracked() == tenant_at_trigger
+            {
+                cursor.set(None);
+                events.set(vec![]);
+                next_cursor.set(None);
+                initial_loaded.set(false);
+                load_events(false);
+            }
+        });
+    });
 
     view! {
         <div class="space-y-6">

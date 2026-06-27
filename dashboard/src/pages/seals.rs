@@ -4,7 +4,7 @@
 //! providing external verifiability: anyone with the public key can verify the seal
 //! without needing access to the live server.
 
-use crate::api::{get_seals, SealRecord, Page};
+use crate::api::{get_seals, Page, SealRecord};
 use crate::app::AppCtx;
 use crate::util::relative_time;
 use leptos::prelude::*;
@@ -14,7 +14,11 @@ use soma_ui::{
 };
 
 fn truncate_hash(h: &str) -> String {
-    if h.len() > 16 { format!("{}…", &h[..16]) } else { h.to_string() }
+    if h.len() > 16 {
+        format!("{}…", &h[..16])
+    } else {
+        h.to_string()
+    }
 }
 
 #[component]
@@ -31,7 +35,10 @@ pub fn SealsPage() -> impl IntoView {
         let token = ctx.token.get();
         let tenant = ctx.tenant_id.get();
         if tenant.is_empty() {
-            load_err.set(Some((0, "Enter a tenant ID in the header to load seals.".to_string())));
+            load_err.set(Some((
+                0,
+                "Enter a tenant ID in the header to load seals.".to_string(),
+            )));
             initial_loaded.set(true);
             return;
         }
@@ -40,7 +47,10 @@ pub fn SealsPage() -> impl IntoView {
         load_err.set(None);
         leptos::task::spawn_local(async move {
             match get_seals(&token, &tenant, cur).await {
-                Ok(Page { items, next_cursor: nc }) => {
+                Ok(Page {
+                    items,
+                    next_cursor: nc,
+                }) => {
                     if append {
                         seals.update(|v| v.extend(items));
                     } else {
