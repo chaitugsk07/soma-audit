@@ -92,7 +92,7 @@ The Ed25519 signing key (`SOMA_AUDIT_SIGNING_KEY`) is only required when running
 - **Sources inventory and auto-registration**: every app that sends events automatically appears in `GET /v1/sources` (admin). Apps can also push `host_url` + `version` via `POST /internal/v1/sources/register` for richer fleet metadata.
 - **Per-source ingest keys**: admins mint a key per service via `POST /v1/sources/keys`. The key is bound to its `source_service`+`tenant_id` — using it to post as a different source returns 403. Revoke via `DELETE /v1/sources/keys`.
 - **Append-only enforcement at the DB layer**: Postgres triggers on `soma_audit.fct_audit_events` raise an exception on any `UPDATE` or `DELETE` — the chain cannot be silently altered even with direct DB access.
-- **Idempotent inserts**: `ON CONFLICT (idempotency_key) DO NOTHING` on every write path. Re-delivering an event never creates duplicates.
+- **Idempotent inserts**: `ON CONFLICT (tenant_id, idempotency_key) DO NOTHING` on every write path. Re-delivering an event never creates duplicates.
 - **RLS tenant isolation**: `FORCE ROW LEVEL SECURITY` on `fct_audit_events`, enforced via the `soma_audit.tenant_id` GUC. One mis-scoped query cannot read another tenant's events.
 - **Rich query filters**: `GET /v1/audit` accepts `from`, `to` (date-range on `occurred_at`), `source_service`, `event_type`, `cursor`, and `limit`. `GET /v1/audit/global` queries across all tenants for fleet-wide event browsing.
 

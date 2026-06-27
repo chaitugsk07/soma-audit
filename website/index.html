@@ -109,7 +109,7 @@
           <div class="line"><span class="ln">6</span><span class="lc"><span class="cm">// 2. Load keys + build the sink.</span></span></div>
           <div class="line"><span class="ln">7</span><span class="lc"><span class="kw">let</span> <span class="nm">sink</span> <span class="pn">=</span> <span class="ty">LocalSink</span><span class="pn">::</span><span class="fn_">new</span><span class="pn">(</span></span></div>
           <div class="line"><span class="ln">8</span><span class="lc">    <span class="nm">pool</span><span class="pn">.</span><span class="fn_">clone</span><span class="pn">(),</span></span></div>
-          <div class="line"><span class="ln">9</span><span class="lc">    <span class="ty">Arc</span><span class="pn">::</span><span class="fn_">new</span><span class="pn">(</span><span class="ty">AuditKeys</span><span class="pn">::</span><span class="fn_">from_env</span><span class="pn">()?),</span></span></div>
+          <div class="line"><span class="ln">9</span><span class="lc">    <span class="ty">Arc</span><span class="pn">::</span><span class="fn_">new</span><span class="pn">(</span><span class="ty">AuditKeys</span><span class="pn">::</span><span class="fn_">from_env_local</span><span class="pn">()?),</span></span></div>
           <div class="line"><span class="ln">10</span><span class="lc">    <span class="st">"my-service"</span></span></div>
           <div class="line"><span class="ln">11</span><span class="lc"><span class="pn">);</span></span></div>
           <div class="line"><span class="ln">12</span><span class="lc">&nbsp;</span></div>
@@ -336,7 +336,7 @@
           <div class="line"><span class="ln">—</span><span class="lc"><span class="cm">-- append-only enforcement</span></span></div>
           <div class="line"><span class="ln">—</span><span class="lc"><span class="kw">CREATE TRIGGER</span> <span class="fn_">no_mutation</span> <span class="kw">BEFORE UPDATE OR DELETE ON</span></span></div>
           <div class="line"><span class="ln">—</span><span class="lc">  <span class="fn_">soma_audit.fct_audit_events</span> <span class="kw">FOR EACH ROW</span></span></div>
-          <div class="line"><span class="ln">—</span><span class="lc">  <span class="kw">EXECUTE</span> <span class="fn_">FUNCTION</span> <span class="fn_">soma_audit.deny_mutation</span><span class="pn">();</span></span></div>
+          <div class="line"><span class="ln">—</span><span class="lc">  <span class="kw">EXECUTE</span> <span class="fn_">FUNCTION</span> <span class="fn_">soma_audit.prevent_mutation</span><span class="pn">();</span></span></div>
         </div>
       </div>
     </div>

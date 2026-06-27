@@ -76,10 +76,10 @@ Under the hood, `install` runs soma-audit's embedded migrations through soma-sch
 | `prev_hash` | `TEXT?` | HMAC of the previous record in this tenant's chain |
 | `entry_hash` | `TEXT` | HMAC-SHA256 of this record's canonical fields |
 | `chain_epoch` | `INT DEFAULT 1` | Signals canonical-format version; bump on breaking changes |
-| `idempotency_key` | `UUID UNIQUE` | Prevents duplicate inserts on retry |
+| `idempotency_key` | `UUID` | Unique per `(tenant_id, idempotency_key)`; prevents duplicate inserts on retry |
 | `created_at` | `TIMESTAMPTZ DEFAULT now()` | Wall-clock insert time |
 
-Unique constraints: `(tenant_id, seq_num)` and `(idempotency_key)`.
+Unique constraints: `(tenant_id, seq_num)` and `(tenant_id, idempotency_key)`.
 
 **Row-level security:** The table has `FORCE ROW LEVEL SECURITY`. The policy `tenant_isolation` filters every read and write using the transaction-local GUC `soma_audit.tenant_id`. Any query that does not set this GUC first will see no rows. `record_in_tx` and `record` set it for you; if you query the table directly, set it with:
 
@@ -253,7 +253,7 @@ sqlx::query("INSERT INTO app.documents (id, tenant_id, content) VALUES ($1, $2, 
 //    The sink sets GUC soma_audit.tenant_id, acquires a per-tenant
 //    pg_advisory_xact_lock (released automatically when the tx ends),
 //    reads the chain head, seals the HMAC record, and inserts it.
-//    ON CONFLICT (idempotency_key) DO NOTHING makes this retry-safe.
+//    ON CONFLICT (tenant_id, idempotency_key) DO NOTHING makes this retry-safe.
 sink.record_in_tx(&event, &mut tx).await?;
 
 // 4. A single COMMIT makes both writes permanent simultaneously.
@@ -385,8 +385,8 @@ install_outbox(&pool).await?;
 This runs soma-schema migrations under advisory lock key `6020250626000002_i64`. It creates:
 
 - Schema `soma_audit_outbox`
-- Table `soma_audit_outbox.events` with columns: `id BIGSERIAL PK`, `event_id UUID UNIQUE`, `payload JSONB`, `created_at TIMESTAMPTZ`, `delivered_at TIMESTAMPTZ`, `attempts INT DEFAULT 0`, `last_error TEXT`
-- Index `idx_outbox_undelivered` on `created_at WHERE delivered_at IS NULL`
+- Table `soma_audit_outbox.events` with columns: `id BIGSERIAL PK`, `event_id UUID UNIQUE`, `payload JSONB`, `created_at TIMESTAMPTZ`, `delivered_at TIMESTAMPTZ`, `attempts INT DEFAULT 0`, `last_error TEXT`, `next_retry_at TIMESTAMPTZ NOT NULL DEFAULT now()`, `failed_permanently_at TIMESTAMPTZ`
+- Index `idx_outbox_undelivered` on `next_retry_at WHERE delivered_at IS NULL`
 
 Pool must have `max_connections >= 2` for the same advisory lock reason as `install`.
 
@@ -436,7 +436,10 @@ let _relay = spawn_relay(
         central_url:   "http://soma-audit-server:8080".into(),
         ingest_secret: std::env::var("SOMA_AUDIT_INGEST_SECRET")?,
         poll_interval: Duration::from_secs(5),   // default
-        batch_size:    50,                        // default
+        batch_size:    50,                        // default; i64
+        max_attempts:  20,                        // dead-letter after N attempts
+        register:      None,                      // optional source self-registration
+        heartbeat:     false,                     // periodic heartbeat to central
     },
 );
 // Drop _relay to detach, or await it for graceful shutdown.
@@ -465,6 +468,7 @@ The server is a standalone binary (`soma-audit-server`) that stores events from 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `SOMA_AUDIT_BIND` | `0.0.0.0:8080` | Bind address |
+| `SOMA_AUDIT_CORS_ORIGINS` | (empty — same-origin only) | Comma-separated allowed origins for browser clients. |
 | `RUST_LOG` | `info` | Tracing filter |
 | `LOG_FORMAT` | human-readable | Set to `json` for structured log output |
 
@@ -479,7 +483,7 @@ SOMA_AUDIT_SIGNING_KEY=<64-hex-chars> \
 soma-audit-server
 ```
 
-On startup the server calls `soma_audit_pg::install(&pool)` (idempotent, advisory lock key `6020250626000001`), then creates the `soma_audit.audit_chain_seals` table (inline DDL, `CREATE TABLE IF NOT EXISTS`), then starts a background seal sweep that runs every 60 seconds, signs the current chain head for every tenant with new events, and inserts a row into `audit_chain_seals`.
+On startup the server calls `soma_audit_pg::install(&pool)` (idempotent, advisory lock key `6020250626000001_i64`), which via its embedded migrations creates the `soma_audit.audit_chain_seals` table, then starts a background seal sweep that runs every 60 seconds, signs the current chain head for every tenant with new events, and inserts a row into `audit_chain_seals`.
 
 **Server endpoints:**
 
@@ -521,7 +525,7 @@ remote_sink.enqueue_in_tx(&event, &mut tx).await?;
 tx.commit().await?;
 ```
 
-Both sinks use `ON CONFLICT (idempotency_key) DO NOTHING`, so the same `idempotency_key` is safe to pass to both. The HMAC chain in the local database and the Ed25519-sealed chain on the central server are independent — compromise of one does not break the other.
+Both sinks use `ON CONFLICT (tenant_id, idempotency_key) DO NOTHING`, so the same `idempotency_key` is safe to pass to both. The HMAC chain in the local database and the Ed25519-sealed chain on the central server are independent — compromise of one does not break the other.
 
 ---
 
@@ -574,7 +578,7 @@ The per-tenant HMAC key derivation (`HKDF-SHA256(IKM=master_secret, salt=None, i
 - **Ed25519 seals:** The seal sweep running on the central server signs the chain head every 60 seconds. A seal is a cryptographic commitment to the chain state at a point in time. Any subsequent deletion or mutation of events that predates the seal will cause `verify` to fail AND the seal signature to be invalid against the known public key (available at `GET /v1/audit/keys`). Seals are the primary defense for high-assurance environments.
 - **HMAC chain:** The chain itself (`prev_hash` → `entry_hash` → `prev_hash` linkage) detects any mutation, gap, or reordering even without seals. `verify` walks the full chain and reports the first broken `seq_num`.
 
-**Verify memory usage:** `LocalSink::verify` loads the entire tenant chain into memory. For tenants with very large event histories, run it as a scheduled background task or during a maintenance window, not inline in a request handler.
+**Verify wall-clock cost:** `LocalSink::verify` streams the chain incrementally (constant memory), but must do a full sequential walk of every row. For tenants with very large event histories, run it as a scheduled background task or during a maintenance window, not inline in a request handler.
 
 **Outbox retention:** Delivered outbox rows are never automatically pruned. For long-running services, plan a pruning job on `soma_audit_outbox.events WHERE delivered_at IS NOT NULL AND delivered_at < now() - interval '30 days'`.
 
