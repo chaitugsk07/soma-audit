@@ -18,9 +18,11 @@
 # dashboard/) which is outside the soma-audit build context.
 
 # ── Stage 1: builder ──────────────────────────────────────────────────────────
-# Match the toolchain declared in workspace.package.rust-version (1.82).
+# Match the toolchain declared in workspace.package.rust-version (1.88).
 # A mismatch triggers a full toolchain re-download on every build.
-FROM rust:1.82-bookworm AS builder
+# 1.88 is the floor enforced by the locked dependency tree: home 0.5.12
+# requires rustc 1.88 and the icu_* 2.2.0 crates (via idna/url) require 1.86.
+FROM rust:1.88-bookworm AS builder
 
 # Network resilience: sparse index sends far fewer requests than the legacy
 # git index; the retry/timeout knobs tolerate a flaky crates.io CDN.
@@ -91,8 +93,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM debian:bookworm-slim AS runtime
 
 # ca-certificates: needed for any TLS outbound calls the server may make.
+# curl: used by the container HEALTHCHECK in docker-compose*.yml (the slim
+# base image ships neither, so without this the healthcheck always fails and
+# the container is reported unhealthy even when the server is fine).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 soma \
     && useradd --uid 10001 --gid soma --no-create-home --shell /sbin/nologin soma

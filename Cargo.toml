@@ -18,7 +18,9 @@ edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/chaitugsk07/soma-audit"
 authors = ["Chaitu Gaddek <dev@kreesalis.com>"]
-rust-version = "1.82"
+# Floor is 1.88, enforced by the locked dependency tree (home 0.5.12 needs
+# rustc 1.88; icu_* 2.2.0 via idna/url need 1.86).
+rust-version = "1.88"
 
 [workspace.dependencies]
 # Serialisation
