@@ -43,7 +43,7 @@ use uuid::Uuid;
 
 // Pull the three audit types from the pg crate — no need for soma-audit-core
 // directly because soma-audit-pg re-exports them.
-use soma_audit_pg::{AuditEvent, AuditKeys, LocalSink, Outcome};
+use soma_audit_pg::{AuditEvent, AuditKeys, ListFilter, LocalSink, Outcome};
 
 // ---------------------------------------------------------------------------
 // App state
@@ -266,7 +266,7 @@ async fn list_audit(
 ) -> Result<Json<Value>, AppError> {
     let (records, next_cursor) = state
         .sink
-        .list(q.tenant_id, None, None, 50)
+        .list(q.tenant_id, ListFilter::default(), 50)
         .await
         .context("list audit")?;
 
