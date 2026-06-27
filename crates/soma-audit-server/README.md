@@ -7,7 +7,7 @@ Binary name: `soma-audit-server`
 ## Required env vars
 
 | Variable | Description |
-|---|---|
+| --- | --- |
 | `DATABASE_URL` | Postgres connection string |
 | `SOMA_AUDIT_MASTER_SECRET` | 64 lowercase hex chars (32 bytes). HKDF master for per-tenant HMAC chain keys. |
 | `SOMA_AUDIT_SIGNING_KEY` | 64 lowercase hex chars (32 bytes). Ed25519 signing key for chain seals. |
@@ -17,7 +17,7 @@ Binary name: `soma-audit-server`
 ## Optional env vars
 
 | Variable | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `SOMA_AUDIT_BIND` | `0.0.0.0:8080` | TCP bind address. |
 | `RUST_LOG` | `info` | Tracing filter. |
 | `LOG_FORMAT` | human-readable | Set to `json` for structured JSON log output. |
@@ -48,18 +48,34 @@ soma-audit-server
 ## Route table
 
 | Method | Path | Auth | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `GET` | `/health` | None | Liveness probe. Returns `"ok"`. |
 | `GET` | `/health/live` | None | Liveness probe. Returns `"ok"`. |
 | `GET` | `/health/ready` | None | Readiness probe. Executes `SELECT 1`; returns `200` or `503`. |
-| `POST` | `/internal/v1/events` | Bearer `SOMA_AUDIT_INGEST_SECRET` | Ingest an event from a relay. Body: `IngestRequest` JSON. Returns `201 {id, seq_num, entry_hash}`. |
-| `GET` | `/v1/audit` | Bearer `SOMA_AUDIT_ADMIN_TOKEN` | List events. Query: `tenant_id`, `event_type?`, `cursor?`, `limit?`. Keyset pagination DESC by `seq_num`, default limit 100, max 500. |
+| `POST` | `/internal/v1/events` | Bearer `SOMA_AUDIT_INGEST_SECRET` or per-source key | Ingest an event from a relay. Body: `IngestRequest` JSON. Returns `201 {id, seq_num, entry_hash}`. |
+| `POST` | `/internal/v1/sources/register` | Bearer `SOMA_AUDIT_INGEST_SECRET` | Register or update source metadata (`host_url`, `version`). Returns `204`. |
+| `POST` | `/internal/v1/heartbeat` | Bearer `SOMA_AUDIT_INGEST_SECRET` | Update `last_seen` for a source without sending an event. Returns `204`. |
+| `GET` | `/v1/audit` | Bearer `SOMA_AUDIT_ADMIN_TOKEN` | List events for a tenant. Query: `tenant_id`, `event_type?`, `source_service?`, `from?`, `to?`, `cursor?`, `limit?`. Keyset DESC by `seq_num`, default limit 100, max 500. |
+| `GET` | `/v1/audit/global` | Bearer `SOMA_AUDIT_ADMIN_TOKEN` | List events across all tenants. Query: `event_type?`, `source_service?`, `from?`, `to?`, `cursor?`, `limit?`. Ordered `occurred_at DESC`. |
 | `GET` | `/v1/audit/verify` | Bearer `SOMA_AUDIT_ADMIN_TOKEN` | Verify the full chain for a tenant. Query: `tenant_id`. Returns `VerifyResult`. |
-| `GET` | `/v1/audit/keys` | Bearer `SOMA_AUDIT_ADMIN_TOKEN` | JWKS document containing the Ed25519 verifying key (`kid="soma-audit-v1"`, `kty="OKP"`, `crv="Ed25519"`). |
+| `GET` | `/v1/audit/keys` | Bearer `SOMA_AUDIT_ADMIN_TOKEN` | JWKS document — Ed25519 verifying key (`kid="soma-audit-v1"`, `kty="OKP"`, `crv="Ed25519"`). |
 | `GET` | `/v1/audit/seals` | Bearer `SOMA_AUDIT_ADMIN_TOKEN` | List the last 100 chain seals for a tenant, DESC by `up_to_seq_num`. Query: `tenant_id`. |
-| `*` | (fallback) | None | Embedded dashboard portal (SPA). Serves assets from `../../dashboard/dist` compiled into the binary via rust-embed; falls back to `index.html` for SPA routing. If `dashboard/dist` was not built, serves a stub HTML page instead. |
+| `GET` | `/v1/sources` | Bearer `SOMA_AUDIT_ADMIN_TOKEN` | Fleet inventory — all `(source_service, tenant_id)` pairs with `event_count`, `host_url`, `version`, `first_seen`, `last_seen`. |
+| `POST` | `/v1/sources/keys` | Bearer `SOMA_AUDIT_ADMIN_TOKEN` | Mint a per-source ingest key bound to `source_service`+`tenant_id`. Body: `{"source_service":"..","tenant_id":".."}`. Returns `{"key":"<64-char hex>","source_service":"..","tenant_id":".."}` — plaintext shown once. |
+| `DELETE` | `/v1/sources/keys` | Bearer `SOMA_AUDIT_ADMIN_TOKEN` | Revoke a per-source key. Query: `source_service`, `tenant_id`. Returns `204`. |
+| `*` | (fallback) | None | Embedded dashboard SPA. Opens on the Sources fleet view. Falls back to `index.html` for SPA routing. If `dashboard/dist` was not built at compile time, serves a stub page. |
 
 Body limit: 1 MiB on all routes.
+
+### Query filter details
+
+`GET /v1/audit` accepts `from` and `to` as RFC3339 timestamps filtering on `occurred_at`. `source_service` is an exact match. `cursor` is the `next_cursor` value from the previous page (keyset on `seq_num`).
+
+`GET /v1/audit/global` uses the same filters except there is no `tenant_id` — it bypasses RLS to query all tenants. The cursor is `occurred_at` in microseconds since epoch; pass back the `next_cursor` value as-is.
+
+### Per-source ingest keys
+
+A per-source key is bound to a specific `(source_service, tenant_id)` pair at mint time. When the server receives an event authenticated with a per-source key, it verifies that the event's `source_service` and `tenant_id` match the binding. A mismatch returns `403 Forbidden`. The shared master `SOMA_AUDIT_INGEST_SECRET` continues to work alongside per-source keys and has no source binding check. See [SECURITY.md](../../SECURITY.md).
 
 ## Ed25519 seal sweep
 

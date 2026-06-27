@@ -15,12 +15,22 @@ soma-audit-pg = { workspace = true }
 
 ### 2. Set env vars
 
-```
+For local-only use (no central server):
+
+```sh
 SOMA_AUDIT_MASTER_SECRET=<64 lowercase hex chars>   # 32-byte HKDF master for per-tenant HMAC keys
-SOMA_AUDIT_SIGNING_KEY=<64 lowercase hex chars>     # 32-byte Ed25519 signing key for chain seals
 ```
 
-Both must be exactly 64 hex characters. `AuditKeys::from_env()` returns an error mentioning "64 hex chars" or "invalid hex character" if they are wrong.
+`AuditKeys::from_env_local()` reads only this variable and generates an ephemeral Ed25519 signing key in-process. `SOMA_AUDIT_SIGNING_KEY` is only required when running `soma-audit-server`.
+
+`AuditKeys::from_env()` reads both variables if you need a stable signing key (e.g. you are running the server):
+
+```sh
+SOMA_AUDIT_MASTER_SECRET=<64 lowercase hex chars>
+SOMA_AUDIT_SIGNING_KEY=<64 lowercase hex chars>     # 32-byte Ed25519 signing key — server only
+```
+
+Both must be exactly 64 hex characters. The relevant constructor returns an error mentioning "64 hex chars" or "invalid hex character" if they are wrong.
 
 ### 3. Install the schema at startup
 
@@ -46,18 +56,39 @@ Pool must have `max_connections >= 2`: one connection is held for the advisory l
 use std::sync::Arc;
 use soma_audit_pg::{AuditKeys, LocalSink};
 
-// from env vars (production):
+// Local-only apps — only SOMA_AUDIT_MASTER_SECRET needed:
+let keys = Arc::new(AuditKeys::from_env_local()?);
+
+// Running soma-audit-server — both env vars required:
 let keys = Arc::new(AuditKeys::from_env()?);
 
-// or from raw bytes (tests / secret-manager integrations):
+// From raw bytes (tests / secret-manager integrations):
 let keys = Arc::new(AuditKeys::from_secret(master_bytes, signing_bytes));
 
-let sink = LocalSink::new(pool.clone(), keys, "my-service");
+// Multi-tenant sink:
+let sink = LocalSink::new(pool.clone(), keys.clone(), "my-service");
+
+// Single-tenant sink — pins a fixed tenant, enables list_default/verify_default:
+let sink = LocalSink::new_single_tenant(pool.clone(), keys, "my-service", tenant_id);
 ```
 
 `source_service` is stamped onto events whose own `source_service` field is empty. Events that arrive with a non-empty `source_service` (e.g. forwarded from the relay/ingest path) are left unchanged.
 
-### 5. Write audit events
+### 5. Build and write audit events
+
+Build events with the builder — `occurred_at`, `metadata`, and `idempotency_key` are auto-filled:
+
+```rust
+use soma_audit_core::{AuditEvent, Outcome, idempotency_key};
+use uuid::Uuid;
+
+let event = AuditEvent::builder(tenant_id, "order.place", Outcome::Success)
+    .actor_id(actor_id)
+    .actor_role("customer")
+    .resource("order", "ord_123")
+    .idempotency_key(idempotency_key(tenant_id, request_id)) // deterministic, retry-safe
+    .build();
+```
 
 **Atomic with a business transaction — preferred:**
 
@@ -78,43 +109,71 @@ Opens its own transaction, calls `record_in_tx`, and commits. There is a small w
 ### 6. Read and verify
 
 ```rust
-// Keyset-paginated list, DESC by seq_num
-let (records, next_cursor) = sink.list(tenant_id, None, None, 100).await?;
+use soma_audit_pg::ListFilter;
 
-// Walk the full chain and verify every HMAC link
+// Keyset-paginated list, DESC by seq_num (no filters):
+let (records, next_cursor) = sink.list(tenant_id, ListFilter::default(), 100).await?;
+
+// With filters (date range + source service):
+let (records, next_cursor) = sink.list(tenant_id, ListFilter {
+    source_service: Some("orders"),
+    from: Some(start),
+    to: Some(end),
+    ..Default::default()
+}, 100).await?;
+
+// Single-tenant shortcut (requires new_single_tenant):
+let (records, next_cursor) = sink.list_default(Some("order.place"), None, 100).await?;
+
+// Walk the full chain and verify every HMAC link:
 let result = sink.verify(tenant_id).await?;
+let result = sink.verify_default().await?; // single-tenant shortcut
 // result.ok, result.entries_checked, result.first_broken_seq
 ```
 
-`list` clamps `limit` to 1–500. `verify` streams rows via a server-side cursor, O(1) memory.
+`list` clamps `limit` to 1–500. `verify` streams rows incrementally, O(1) memory.
 
 ## Public API
 
 ```rust
 pub async fn install(pool: &sqlx::PgPool) -> Result<(), InstallError>
 
-pub struct LocalSink { /* pool, keys, source_service */ }
+pub struct LocalSink { /* pool, keys, source_service, fixed_tenant */ }
 
 impl LocalSink {
     pub fn new(pool: PgPool, keys: Arc<AuditKeys>, source_service: impl Into<String>) -> Self
+    pub fn new_single_tenant(pool: PgPool, keys: Arc<AuditKeys>, source_service: impl Into<String>, tenant_id: Uuid) -> Self
     pub async fn record_in_tx(&self, event: &AuditEvent, tx: &mut Transaction<'_, Postgres>) -> Result<AuditRecord, AuditPgError>
     pub async fn record(&self, event: &AuditEvent) -> Result<AuditRecord, AuditPgError>
-    pub async fn list(&self, tenant_id: Uuid, event_type: Option<&str>, cursor: Option<i64>, limit: i64) -> Result<(Vec<AuditRecord>, Option<i64>), AuditPgError>
+    pub async fn list(&self, tenant_id: Uuid, filter: ListFilter<'_>, limit: i64) -> Result<(Vec<AuditRecord>, Option<i64>), AuditPgError>
+    pub async fn list_default(&self, event_type: Option<&str>, cursor: Option<i64>, limit: i64) -> Result<(Vec<AuditRecord>, Option<i64>), AuditPgError>
+    pub async fn list_global(&self, filter: ListFilter<'_>, limit: i64) -> Result<(Vec<AuditRecord>, Option<i64>), AuditPgError>
     pub async fn verify(&self, tenant_id: Uuid) -> Result<VerifyResult, AuditPgError>
+    pub async fn verify_default(&self) -> Result<VerifyResult, AuditPgError>
     pub fn pool(&self) -> &PgPool
+}
+
+pub struct ListFilter<'a> {
+    pub event_type: Option<&'a str>,
+    pub source_service: Option<&'a str>,
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    pub cursor: Option<i64>,
 }
 
 pub struct AuditKeys { /* master_secret: Zeroizing<[u8;32]>, signing_key: SigningKey */ }
 
 impl AuditKeys {
-    pub fn from_env() -> Result<Self, AuditPgError>
+    pub fn from_env_local() -> Result<Self, AuditPgError>  // local-only: SOMA_AUDIT_MASTER_SECRET only
+    pub fn from_env() -> Result<Self, AuditPgError>         // server: both env vars required
     pub fn from_secret(master_secret: [u8; 32], signing_key: [u8; 32]) -> Self
     pub fn verifying_key(&self) -> ed25519_dalek::VerifyingKey
     pub fn sign_seal(&self, payload: &[u8]) -> Vec<u8>
 }
 
 // Re-exported from soma-audit-core so you only need this crate as a direct dependency:
-pub use soma_audit_core::{AuditEvent, AuditRecord, Outcome, VerifyResult};
+pub use soma_audit_core::{AuditEvent, AuditEventBuilder, AuditRecord, Outcome, VerifyResult};
+pub use soma_audit_core::idempotency_key;
 ```
 
 ## Error types
@@ -134,10 +193,10 @@ pub enum AuditPgError {
 
 ## Env vars
 
-| Variable | Required | Description |
-|---|---|---|
-| `SOMA_AUDIT_MASTER_SECRET` | Yes | 64 lowercase hex chars (32 bytes). HKDF master for per-tenant HMAC keys. Read by `AuditKeys::from_env()`. |
-| `SOMA_AUDIT_SIGNING_KEY` | Yes | 64 lowercase hex chars (32 bytes). Ed25519 signing key for chain seals. Read by `AuditKeys::from_env()`. |
+| Variable | Required by | Description |
+| --- | --- | --- |
+| `SOMA_AUDIT_MASTER_SECRET` | `from_env_local()`, `from_env()` | 64 lowercase hex chars (32 bytes). HKDF master for per-tenant HMAC keys. |
+| `SOMA_AUDIT_SIGNING_KEY` | `from_env()` only | 64 lowercase hex chars (32 bytes). Ed25519 signing key for chain seals. Only needed when running `soma-audit-server`. |
 
 ## Gotchas
 

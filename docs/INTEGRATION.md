@@ -10,7 +10,7 @@ It covers every mode, every real API call, and the invariants that make the chai
 soma-audit offers three deployment modes.
 
 | Mode | How events are stored | When to use |
-|---|---|---|
+| --- | --- | --- |
 | **Local** | Written directly into the host service's own Postgres database, inside the `soma_audit` schema. | Single-service deployments, or services that own a private database and need the audit log co-located with business data. |
 | **Remote** | Written to a durable local outbox table first, then relayed in the background to a central `soma-audit-server`. | Multi-service platforms where you want a single pane of glass across services. Events are never lost during server outages because the outbox is transactional. |
 | **Both** | Local sink records events into the service's database; the outbox+relay also forwards them to the central server. | High-assurance platforms where you want cryptographic proof at the service level (Local) AND cross-service queryability and Ed25519-sealed snapshots at the platform level (Remote). |
@@ -59,7 +59,7 @@ Under the hood, `install` runs soma-audit's embedded migrations through soma-sch
 **Table:** `soma_audit.fct_audit_events`
 
 | Column | Type | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `id` | `UUID` | Primary key, assigned by the sink |
 | `tenant_id` | `UUID` | Required; used by the RLS policy |
 | `seq_num` | `BIGINT` | Monotonically increasing per tenant; part of the HMAC chain |
@@ -90,6 +90,7 @@ SELECT set_config('soma_audit.tenant_id', $1::text, true);
 **Append-only triggers:** Two triggers (`no_update`, `no_delete`) call `soma_audit.prevent_mutation()`, which raises `EXCEPTION 'soma_audit.fct_audit_events is append-only'` on any `UPDATE` or `DELETE`. There is no soft-delete path.
 
 **Indexes:**
+
 - `idx_audit_tenant_seq` on `(tenant_id, seq_num DESC)` — primary read path
 - `idx_audit_tenant_time` BRIN on `occurred_at` — time-range scans
 - `idx_audit_tenant_event` on `(tenant_id, event_type)` — filtered event-type queries
@@ -108,25 +109,34 @@ Because `install` is idempotent and checksum-verified, running it from multiple 
 
 ### 2.4 Loading keys
 
-**From environment (production):**
+There are three ways to load keys depending on what you are running:
+
+**Local-only apps — `from_env_local()` (recommended for embedded use):**
 
 ```rust
 use soma_audit_pg::AuditKeys;
 
+let keys = AuditKeys::from_env_local()?;
+```
+
+`from_env_local` reads only `SOMA_AUDIT_MASTER_SECRET` (exactly 64 lowercase hex characters / 32 bytes) and generates an ephemeral Ed25519 signing key in-process. The signing key is not persisted and not needed for local-only audit: Ed25519 seals are only issued by `soma-audit-server`. Use this constructor for all apps that write events into their own database without running the central server.
+
+**Running `soma-audit-server` — `from_env()` (both keys required):**
+
+```rust
 let keys = AuditKeys::from_env()?;
 ```
 
-`from_env` reads two environment variables:
+`from_env` reads both environment variables:
 
-- `SOMA_AUDIT_MASTER_SECRET` — exactly 64 lowercase hex characters (32 bytes); used as the HKDF master for per-tenant HMAC keys.
-- `SOMA_AUDIT_SIGNING_KEY` — exactly 64 lowercase hex characters (32 bytes); the Ed25519 signing key for chain seals.
+- `SOMA_AUDIT_MASTER_SECRET` — 64 lowercase hex chars (32 bytes); HKDF master for per-tenant HMAC keys.
+- `SOMA_AUDIT_SIGNING_KEY` — 64 lowercase hex chars (32 bytes); Ed25519 signing key for chain seals.
 
 If either variable is missing or not valid hex, `from_env` returns `AuditPgError::Env` with a human-readable message.
 
 **From a secret manager (vault-sourced):**
 
 ```rust
-// Decode from your vault client's output before passing in.
 let master_bytes: [u8; 32] = decode_from_vault("soma-audit-master")?;
 let signing_bytes: [u8; 32] = decode_from_vault("soma-audit-signing")?;
 
@@ -137,45 +147,89 @@ let keys = AuditKeys::from_secret(master_bytes, signing_bytes);
 
 ### 2.5 Constructing `LocalSink`
 
+**Multi-tenant apps:**
+
 ```rust
 use std::sync::Arc;
 use soma_audit_pg::{AuditKeys, LocalSink};
 
-let keys = Arc::new(AuditKeys::from_env()?);
+let keys = Arc::new(AuditKeys::from_env_local()?);
 let sink = LocalSink::new(pool.clone(), keys, "my-service");
 ```
 
 `source_service` (`"my-service"` above) is stamped onto every event whose own `source_service` field is empty. Events that already carry a non-empty `source_service` (for example, events arriving via the relay ingest path) are left unchanged.
 
+**Single-tenant apps — `new_single_tenant`:**
+
+```rust
+let tenant_id = Uuid::parse_str("...your fixed tenant uuid...")?;
+let sink = LocalSink::new_single_tenant(pool.clone(), keys, "my-service", tenant_id);
+```
+
+With a single-tenant sink you can use `list_default` and `verify_default` instead of passing the tenant UUID at every call site:
+
+```rust
+// No tenant_id argument needed:
+let (records, next_cursor) = sink.list_default(Some("user.login"), None, 50).await?;
+let result = sink.verify_default().await?;
+```
+
+When the event's `tenant_id` field is `Uuid::nil()`, the sink automatically fills in the fixed tenant. Build events with nil tenant to use the shortcut:
+
+```rust
+let event = AuditEvent::builder(Uuid::nil(), "user.login", Outcome::Success)
+    .actor_id(actor_id)
+    .build();
+sink.record(&event).await?; // tenant is filled by the sink
+```
+
 The pool must have `max_connections >= 2`: one connection is held for the per-tenant advisory lock inside each `record_in_tx` call; at least one more is needed for the insert.
 
 ### 2.6 Building an `AuditEvent`
 
-```rust
-use soma_audit_pg::{AuditEvent, Outcome};
-use serde_json::json;
-use uuid::Uuid;
-use chrono::Utc;
+The recommended way is the builder, which auto-stamps `occurred_at`, `metadata`, and `idempotency_key` when you leave them out:
 
-let event = AuditEvent {
-    source_service:  String::new(),          // sink fills in "my-service" when empty
-    idempotency_key: Uuid::new_v4(),         // generate fresh per operation
-    tenant_id:       tenant_id,
-    event_type:      "document.create".into(),
-    actor_id:        Some(actor_id),
-    actor_role:      Some("editor".into()),
-    resource_type:   Some("document".into()),
-    resource_id:     Some(doc_id.to_string()),
-    outcome:         Outcome::Success,
-    actor_ip:        req.peer_addr().map(|a| a.ip()),
-    occurred_at:     Utc::now(),
-    metadata:        json!({ "title": title, "size_bytes": size }),
-};
+```rust
+use soma_audit_core::{AuditEvent, Outcome, idempotency_key};
+use uuid::Uuid;
+use serde_json::json;
+
+// Minimal — only the three required fields:
+let event = AuditEvent::builder(tenant_id, "document.create", Outcome::Success).build();
+
+// With optional fields:
+let event = AuditEvent::builder(tenant_id, "document.create", Outcome::Success)
+    .actor_id(actor_id)
+    .actor_role("editor")
+    .resource("document", doc_id.to_string())
+    .actor_ip(req.peer_addr().map(|a| a.ip()).unwrap())
+    .metadata(json!({ "title": title, "size_bytes": size }))
+    .build();
+
+// With a deterministic idempotency key (retry-safe deduplication):
+let event = AuditEvent::builder(tenant_id, "document.create", Outcome::Success)
+    .idempotency_key(idempotency_key(tenant_id, request_id))
+    .build();
 ```
+
+Builder chain reference:
+
+| Method | Type | Notes |
+| --- | --- | --- |
+| `.actor_id(Uuid)` | optional | The user or service performing the action |
+| `.actor_role(impl Into<String>)` | optional | Role label, e.g. `"admin"` |
+| `.resource(type, id)` | optional | Resource kind + identifier |
+| `.actor_ip(IpAddr)` | optional | Source IP |
+| `.metadata(serde_json::Value)` | optional | Arbitrary structured payload; defaults to `{}` |
+| `.occurred_at(DateTime<Utc>)` | optional | Defaults to `Utc::now()` |
+| `.source_service(impl Into<String>)` | optional | Override the service name; sink fills in its own name when empty |
+| `.idempotency_key(Uuid)` | optional | Defaults to a random v4 UUID; use `idempotency_key(tenant_id, request_id)` for deterministic retry-safe keys |
 
 `Outcome` has three variants: `Success`, `Denied`, `Error`. They serialize as `"success"`, `"denied"`, `"error"` in JSON and are stored as `TEXT` with a `CHECK` constraint in Postgres.
 
-`metadata` defaults to `json!({})` (an empty JSON object) when deserialized from JSON that omits the field.
+**For reference — the underlying struct fields:**
+
+`AuditEvent` is a plain struct with fields `source_service`, `idempotency_key`, `tenant_id`, `event_type`, `actor_id`, `actor_role`, `resource_type`, `resource_id`, `outcome`, `actor_ip`, `occurred_at`, and `metadata`. You can construct it directly if you prefer, but the builder is shorter and handles the defaults.
 
 ### 2.7 Recording events
 
@@ -224,24 +278,60 @@ sink.record(&event).await?;
 
 ### 3.1 Listing events
 
+`list` takes a `ListFilter` struct for its optional filters:
+
 ```rust
-// Page 1 — most recent 50 events for the tenant.
-let (records, next_cursor) = sink.list(tenant_id, None, None, 50).await?;
+use soma_audit_pg::{ListFilter};
+
+// Page 1 — most recent 50 events for the tenant (no filters).
+let (records, next_cursor) = sink
+    .list(tenant_id, ListFilter::default(), 50)
+    .await?;
 
 // Filter to a specific event type.
 let (records, next_cursor) = sink
-    .list(tenant_id, Some("document.create"), None, 50)
+    .list(tenant_id, ListFilter { event_type: Some("document.create"), ..Default::default() }, 50)
+    .await?;
+
+// Filter by date range and source service.
+use chrono::{DateTime, Utc};
+let (records, next_cursor) = sink
+    .list(tenant_id, ListFilter {
+        source_service: Some("orders"),
+        from: Some(DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")?.with_timezone(&Utc)),
+        to: Some(Utc::now()),
+        ..Default::default()
+    }, 100)
     .await?;
 
 // Page 2 — pass the cursor from the previous response.
 let (records, next_cursor) = sink
-    .list(tenant_id, None, next_cursor, 50)
+    .list(tenant_id, ListFilter { cursor: next_cursor, ..Default::default() }, 50)
     .await?;
 ```
+
+`ListFilter` fields:
+
+| Field | Type | Filters on |
+| --- | --- | --- |
+| `event_type` | `Option<&str>` | Exact match on `event_type` |
+| `source_service` | `Option<&str>` | Exact match on `source_service` |
+| `from` | `Option<DateTime<Utc>>` | `occurred_at >= from` |
+| `to` | `Option<DateTime<Utc>>` | `occurred_at <= to` |
+| `cursor` | `Option<i64>` | Keyset: `seq_num < cursor` (for next-page pagination) |
 
 Results are returned in descending `seq_num` order (newest first). `limit` is clamped to 1–500. `next_cursor` is `Some(seq_num)` when more pages exist, `None` on the last page.
 
 `list` sets the `soma_audit.tenant_id` GUC before querying, satisfying RLS automatically.
+
+**Single-tenant shortcut — `list_default`:**
+
+```rust
+// Only event_type and cursor filters; uses the sink's fixed tenant.
+let (records, next_cursor) = sink.list_default(Some("user.login"), None, 50).await?;
+```
+
+`list_default` is only available on sinks constructed with `new_single_tenant`. It returns `AuditPgError::Env` otherwise.
 
 ### 3.2 Verifying the chain
 
@@ -268,7 +358,15 @@ if result.ok {
 
 `verify` stops at the first broken record and reports its `seq_num` in `first_broken_seq`.
 
-Note: `verify` loads the entire tenant chain into memory. For very large tenants this may be slow; consider scheduling it as a background task rather than running it on-demand in a request handler.
+`verify` streams rows incrementally (O(1) memory), so chain length is not a concern for memory. For very large chains it may still be slow wall-clock time; consider scheduling it as a background task rather than running it on-demand in a request handler.
+
+**Single-tenant shortcut — `verify_default`:**
+
+```rust
+let result = sink.verify_default().await?;
+```
+
+`verify_default` is only available on sinks constructed with `new_single_tenant`.
 
 ---
 
@@ -355,7 +453,7 @@ The server is a standalone binary (`soma-audit-server`) that stores events from 
 **Required environment variables:**
 
 | Variable | Description |
-|---|---|
+| --- | --- |
 | `DATABASE_URL` | Postgres connection string for the central audit database |
 | `SOMA_AUDIT_INGEST_SECRET` | Bearer token expected at `POST /internal/v1/events` (must match `RelayConfig.ingest_secret`) |
 | `SOMA_AUDIT_ADMIN_TOKEN` | Bearer token for all `/v1/audit/*` query endpoints |
@@ -365,7 +463,7 @@ The server is a standalone binary (`soma-audit-server`) that stores events from 
 **Optional:**
 
 | Variable | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `SOMA_AUDIT_BIND` | `0.0.0.0:8080` | Bind address |
 | `RUST_LOG` | `info` | Tracing filter |
 | `LOG_FORMAT` | human-readable | Set to `json` for structured log output |
@@ -386,14 +484,29 @@ On startup the server calls `soma_audit_pg::install(&pool)` (idempotent, advisor
 **Server endpoints:**
 
 | Method | Path | Auth | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `GET` | `/health` | none | Liveness probe, returns `"ok"` |
+| `GET` | `/health/live` | none | Liveness probe, returns `"ok"` |
 | `GET` | `/health/ready` | none | Readiness probe, executes `SELECT 1`; 200 or 503 |
 | `POST` | `/internal/v1/events` | Bearer `INGEST_SECRET` | Ingest one event from a relay |
-| `GET` | `/v1/audit` | Bearer `ADMIN_TOKEN` | List events (keyset pagination) |
-| `GET` | `/v1/audit/verify` | Bearer `ADMIN_TOKEN` | Verify full HMAC chain for a tenant |
+| `POST` | `/internal/v1/sources/register` | Bearer `INGEST_SECRET` | Register/update source metadata (host_url, version) |
+| `POST` | `/internal/v1/heartbeat` | Bearer `INGEST_SECRET` | Update `last_seen` for a source |
+| `GET` | `/v1/audit` | Bearer `ADMIN_TOKEN` | List events. Query: `tenant_id`, `event_type?`, `source_service?`, `from?`, `to?`, `cursor?`, `limit?` |
+| `GET` | `/v1/audit/global` | Bearer `ADMIN_TOKEN` | List events across all tenants. Query: `event_type?`, `source_service?`, `from?`, `to?`, `cursor?`, `limit?` |
+| `GET` | `/v1/audit/verify` | Bearer `ADMIN_TOKEN` | Verify full HMAC chain for a tenant. Query: `tenant_id` |
 | `GET` | `/v1/audit/keys` | Bearer `ADMIN_TOKEN` | JWKS endpoint — Ed25519 verifying key |
-| `GET` | `/v1/audit/seals` | Bearer `ADMIN_TOKEN` | List Ed25519 chain seals for a tenant |
+| `GET` | `/v1/audit/seals` | Bearer `ADMIN_TOKEN` | List Ed25519 chain seals for a tenant. Query: `tenant_id` |
+| `GET` | `/v1/sources` | Bearer `ADMIN_TOKEN` | List all registered sources with event counts and last-seen timestamps |
+| `POST` | `/v1/sources/keys` | Bearer `ADMIN_TOKEN` | Mint a per-source ingest key. Body: `{"source_service":"..","tenant_id":".."}`. Returns plaintext key once. |
+| `DELETE` | `/v1/sources/keys` | Bearer `ADMIN_TOKEN` | Revoke a per-source key. Query: `source_service`, `tenant_id`. Returns 204. |
+
+**Query filters for `/v1/audit`:** `from` and `to` are RFC3339 timestamps that filter on `occurred_at`. `source_service` is an exact match. `cursor` is the `next_cursor` value from the previous page (keyset on `seq_num`).
+
+**`/v1/audit/global`:** Same filters as `/v1/audit` except no `tenant_id` (it queries all tenants). Cursor here is `occurred_at` in microseconds since epoch (the value returned as `next_cursor`).
+
+**Auto-registration:** When an app sends its first event to `/internal/v1/events`, that `(source_service, tenant_id)` pair is automatically inserted into the `soma_audit.sources` table. It will appear in `GET /v1/sources` and in the dashboard Sources page without any additional configuration. Apps can enrich their entry by calling `POST /internal/v1/sources/register` with `host_url` and `version`.
+
+**Per-source ingest keys:** Instead of sharing `SOMA_AUDIT_INGEST_SECRET` across all services, mint a dedicated key for each service. A per-source key is bound to its `source_service`+`tenant_id` — posting as a different source returns 403. The master ingest secret still works for bootstrap and admin tooling. See [SECURITY.md](../SECURITY.md) for the full security model.
 
 **Cross-service dimension:** Because every `AuditEvent` carries a `source_service` field, events forwarded by multiple services are stored together in the central database but remain distinguishable by `source_service`. The server's `LocalSink` is constructed with `source_service = "soma-audit"` and only stamps that name on events that arrive with an empty `source_service`. Events forwarded via the relay already carry the originating service name and it is preserved verbatim.
 
@@ -473,10 +586,10 @@ The following shows a complete service startup sequence for Local mode, condense
 
 ```rust
 use std::sync::Arc;
-use soma_audit_pg::{AuditKeys, LocalSink, AuditEvent, Outcome};
+use soma_audit_pg::{AuditKeys, LocalSink};
+use soma_audit_core::{AuditEvent, Outcome};
 use serde_json::json;
 use uuid::Uuid;
-use chrono::Utc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -490,7 +603,9 @@ async fn main() -> anyhow::Result<()> {
     soma_audit_pg::install(&pool).await?;
 
     // 3. Load keys from environment.
-    let keys = Arc::new(AuditKeys::from_env()?);
+    //    Local-only apps use from_env_local() — only SOMA_AUDIT_MASTER_SECRET required.
+    //    from_env() is for soma-audit-server (also needs SOMA_AUDIT_SIGNING_KEY).
+    let keys = Arc::new(AuditKeys::from_env_local()?);
 
     // 4. Build the sink.
     let sink = LocalSink::new(pool.clone(), keys, "my-service");
@@ -500,20 +615,12 @@ async fn main() -> anyhow::Result<()> {
     let tenant_id = Uuid::parse_str("...")?;
     let actor_id  = Uuid::parse_str("...")?;
 
-    let event = AuditEvent {
-        source_service:  String::new(),
-        idempotency_key: Uuid::new_v4(),
-        tenant_id,
-        event_type:      "order.place".into(),
-        actor_id:        Some(actor_id),
-        actor_role:      Some("customer".into()),
-        resource_type:   Some("order".into()),
-        resource_id:     Some("ord_123".into()),
-        outcome:         Outcome::Success,
-        actor_ip:        None,
-        occurred_at:     Utc::now(),
-        metadata:        json!({ "amount_cents": 4999 }),
-    };
+    let event = AuditEvent::builder(tenant_id, "order.place", Outcome::Success)
+        .actor_id(actor_id)
+        .actor_role("customer")
+        .resource("order", "ord_123")
+        .metadata(json!({ "amount_cents": 4999 }))
+        .build();
 
     // Atomic path: business write + audit in one transaction.
     let mut tx = pool.begin().await?;

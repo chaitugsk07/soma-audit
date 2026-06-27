@@ -27,9 +27,9 @@ soma-audit-pg = { path = "path/to/soma-audit-pg" }
 
 ```rust
 use std::sync::Arc;
-use soma_audit_pg::{install, AuditKeys, LocalSink, AuditEvent, Outcome};
+use soma_audit_pg::{install, AuditKeys, LocalSink};
+use soma_audit_core::{AuditEvent, Outcome, idempotency_key};
 use uuid::Uuid;
-use chrono::Utc;
 use serde_json::json;
 
 #[tokio::main]
@@ -38,11 +38,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Create the soma_audit schema and fct_audit_events table.
     // Idempotent — safe to call every startup.
-    // Requires SOMA_AUDIT_MASTER_SECRET and SOMA_AUDIT_SIGNING_KEY in env
-    // (each exactly 64 lowercase hex chars = 32 bytes).
+    // Requires SOMA_AUDIT_MASTER_SECRET in env (64 lowercase hex chars = 32 bytes).
+    // Local-only apps do NOT need SOMA_AUDIT_SIGNING_KEY — use from_env_local().
     install(&pool).await?;
 
-    let keys = Arc::new(AuditKeys::from_env()?);
+    let keys = Arc::new(AuditKeys::from_env_local()?);
     let sink = LocalSink::new(pool.clone(), keys, "my-service");
 
     // Record an event atomic with a business transaction.
@@ -50,20 +50,15 @@ async fn main() -> anyhow::Result<()> {
 
     // ... your business write here ...
 
-    let event = AuditEvent {
-        source_service: "my-service".into(),
-        idempotency_key: Uuid::new_v4(),
-        tenant_id: Uuid::parse_str("...tenant uuid...")?,
-        event_type: "user.login".into(),
-        actor_id: Some(Uuid::parse_str("...user uuid...")?),
-        actor_role: Some("admin".into()),
-        resource_type: Some("session".into()),
-        resource_id: None,
-        outcome: Outcome::Success,
-        actor_ip: None,
-        occurred_at: Utc::now(),
-        metadata: json!({}),
-    };
+    let tenant_id = Uuid::parse_str("...tenant uuid...")?;
+    let request_id = Uuid::parse_str("...request uuid...")?;
+
+    let event = AuditEvent::builder(tenant_id, "user.login", Outcome::Success)
+        .actor_id(Uuid::parse_str("...user uuid...")?)
+        .actor_role("admin")
+        .resource("session", "sess-abc")
+        .idempotency_key(idempotency_key(tenant_id, request_id)) // deterministic, retry-safe
+        .build();
 
     sink.record_in_tx(&event, &mut tx).await?;
     tx.commit().await?;
@@ -72,25 +67,34 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-Environment variables required by `AuditKeys::from_env()`:
+`AuditEvent::builder(tenant_id, event_type, outcome)` accepts the three required fields and lets you chain optional ones. `occurred_at`, `metadata`, and `idempotency_key` are auto-filled when omitted.
+
+Environment variables for local-only apps (`AuditKeys::from_env_local()`):
 
 | Variable | Format |
 | --- | --- |
 | `SOMA_AUDIT_MASTER_SECRET` | 64 lowercase hex chars (32 bytes) |
-| `SOMA_AUDIT_SIGNING_KEY` | 64 lowercase hex chars (32 bytes) |
+
+The Ed25519 signing key (`SOMA_AUDIT_SIGNING_KEY`) is only required when running `soma-audit-server`. Local-only apps use `from_env_local()` which generates an ephemeral signing key in-process.
 
 ---
 
 ## What you get
 
 - **Atomic writes** via `record_in_tx`: the audit row commits with the business write inside a single Postgres transaction — there is no window where the action is committed but the audit event is missing.
+- **Ergonomic builder**: `AuditEvent::builder(tenant_id, event_type, outcome)` chains optional fields and auto-stamps `occurred_at`, `metadata`, and `idempotency_key`.
+- **Single-tenant shortcut**: `LocalSink::new_single_tenant(pool, keys, service, tenant_id)` pins a fixed tenant so you never pass the UUID to `list_default()` / `verify_default()`.
+- **Deterministic idempotency**: `idempotency_key(tenant_id, request_id)` derives a stable v5 UUID so retries deduplicate without extra bookkeeping.
 - **Per-tenant HMAC hash chain**: each record covers the previous record's `entry_hash`. Editing any field, deleting any row, or reordering rows breaks the chain.
 - **Chain verification** via `LocalSink::verify(tenant_id)` (or `GET /v1/audit/verify?tenant_id=...` on the server): walks every row for a tenant and reports `VerifyResult { ok, entries_checked, first_broken_seq }`.
 - **Ed25519 seals**: a background sweep runs every 60 s on the central server and signs the current chain head into `soma_audit.audit_chain_seals`. The public key is served as a JWK at `GET /v1/audit/keys`.
-- **Central aggregation and admin portal**: `soma-audit-server` ingests events from multiple services, stores them in its own hash-chained Postgres, and serves a dashboard at the root.
+- **Central aggregation, fleet view, and admin portal**: `soma-audit-server` ingests events from multiple services, stores them in its own hash-chained Postgres, and serves a dashboard at the root. The dashboard opens on a Sources page showing all registered installs with health dots and event counts — click any source to drill into its events. See [docs/CENTRAL.md](docs/CENTRAL.md) for the full central deployment guide.
+- **Sources inventory and auto-registration**: every app that sends events automatically appears in `GET /v1/sources` (admin). Apps can also push `host_url` + `version` via `POST /internal/v1/sources/register` for richer fleet metadata.
+- **Per-source ingest keys**: admins mint a key per service via `POST /v1/sources/keys`. The key is bound to its `source_service`+`tenant_id` — using it to post as a different source returns 403. Revoke via `DELETE /v1/sources/keys`.
 - **Append-only enforcement at the DB layer**: Postgres triggers on `soma_audit.fct_audit_events` raise an exception on any `UPDATE` or `DELETE` — the chain cannot be silently altered even with direct DB access.
 - **Idempotent inserts**: `ON CONFLICT (idempotency_key) DO NOTHING` on every write path. Re-delivering an event never creates duplicates.
 - **RLS tenant isolation**: `FORCE ROW LEVEL SECURITY` on `fct_audit_events`, enforced via the `soma_audit.tenant_id` GUC. One mis-scoped query cannot read another tenant's events.
+- **Rich query filters**: `GET /v1/audit` accepts `from`, `to` (date-range on `occurred_at`), `source_service`, `event_type`, `cursor`, and `limit`. `GET /v1/audit/global` queries across all tenants for fleet-wide event browsing.
 
 ---
 
@@ -135,6 +139,8 @@ Environment variables required by `AuditKeys::from_env()`:
                  ▼
         Admin portal + /v1/audit/* API
         (list, verify, seals, JWKS)
+        /v1/sources fleet view + auto-discovery
+        /v1/sources/keys per-source ingest keys
 ```
 
 ---
