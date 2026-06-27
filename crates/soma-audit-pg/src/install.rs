@@ -12,6 +12,12 @@ static MIGRATIONS_DIR: soma_schema::include_dir::Dir =
 /// The pool must have `max_connections >= 2`. One connection is held for the
 /// advisory lock; at least one more is needed for migration queries.
 pub async fn install(pool: &sqlx::PgPool) -> Result<(), InstallError> {
+    if pool.options().get_max_connections() < 2 {
+        return Err(InstallError::Env(
+            "soma-audit requires a pool with max_connections >= 2".into(),
+        ));
+    }
+
     let driver = soma_schema::PostgresDriver::new(
         pool.clone(),
         soma_schema::PostgresConfig {

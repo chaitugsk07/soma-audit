@@ -86,7 +86,7 @@ let result = sink.verify(tenant_id).await?;
 // result.ok, result.entries_checked, result.first_broken_seq
 ```
 
-`list` clamps `limit` to 1–500. `verify` loads the entire tenant chain into memory — not suitable for very large tenants without pagination.
+`list` clamps `limit` to 1–500. `verify` streams rows via a server-side cursor, O(1) memory.
 
 ## Public API
 

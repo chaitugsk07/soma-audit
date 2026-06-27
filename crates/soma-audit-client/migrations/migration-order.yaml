@@ -7,3 +7,10 @@ versions:
         created: "2026-06-26"
         author: "soma-audit-client"
         why: "Create outbox table to durably buffer audit events before relay to the central server"
+  - version: 2
+    description: "Dead-letter support for permanently-failed outbox rows"
+    migrations:
+      - file: "20260626_02_dead-letter.sql"
+        created: "2026-06-26"
+        author: "soma-audit-client"
+        why: "Add failed_permanently_at column to skip rows that have exhausted max_attempts"

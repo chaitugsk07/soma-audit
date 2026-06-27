@@ -1827,6 +1827,7 @@ dependencies = [
  "hkdf",
  "hmac",
  "include_dir",
+ "rand 0.8.6",
  "serde",
  "serde_json",
  "sha2",

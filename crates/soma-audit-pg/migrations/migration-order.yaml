@@ -14,3 +14,17 @@ versions:
         created: "2026-06-26"
         author: "soma-audit"
         why: "Move audit_chain_seals from inline server DDL into a tracked migration"
+  - version: 3
+    description: "Scope idempotency_key uniqueness to (tenant_id, idempotency_key)"
+    migrations:
+      - file: "20260626_03_idempotency-scope.sql"
+        created: "2026-06-26"
+        author: "soma-audit"
+        why: "Replace global UNIQUE(idempotency_key) with tenant-scoped UNIQUE(tenant_id, idempotency_key)"
+  - version: 4
+    description: "Unique constraint on (tenant_id, up_to_seq_num) for chain seals"
+    migrations:
+      - file: "20260626_04_seal-unique.sql"
+        created: "2026-06-26"
+        author: "soma-audit"
+        why: "Prevent duplicate seals for same (tenant, chain-head) from concurrent seal sweeps"

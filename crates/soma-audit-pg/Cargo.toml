@@ -24,6 +24,7 @@ hkdf = { workspace = true }
 sha2 = { workspace = true }
 hmac = { workspace = true }
 ed25519-dalek = { workspace = true }
+rand = { workspace = true }
 zeroize = { workspace = true }
 thiserror = { workspace = true }
 include_dir = { workspace = true }

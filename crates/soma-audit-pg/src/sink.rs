@@ -16,6 +16,7 @@ pub struct LocalSink {
     pool: PgPool,
     keys: Arc<AuditKeys>,
     source_service: String,
+    fixed_tenant: Option<Uuid>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -91,6 +92,27 @@ impl LocalSink {
             pool,
             keys,
             source_service: source_service.into(),
+            fixed_tenant: None,
+        }
+    }
+
+    /// Convenience constructor for single-tenant embedded use.
+    ///
+    /// When `record_in_tx` or `record` receives an event whose `tenant_id` is
+    /// [`Uuid::nil`], the `tenant_id` is automatically replaced with `tenant_id`.
+    /// Use `list_default` and `verify_default` to avoid passing the tenant ID
+    /// to every call.
+    pub fn new_single_tenant(
+        pool: PgPool,
+        keys: Arc<AuditKeys>,
+        source_service: impl Into<String>,
+        tenant_id: Uuid,
+    ) -> Self {
+        Self {
+            pool,
+            keys,
+            source_service: source_service.into(),
+            fixed_tenant: Some(tenant_id),
         }
     }
 
@@ -109,6 +131,12 @@ impl LocalSink {
         // cross-service dimension. So only fill it in when absent.
         if stamped.source_service.is_empty() {
             stamped.source_service = self.source_service.clone();
+        }
+        // For single-tenant sinks: fill in the fixed tenant when the event carries nil.
+        if stamped.tenant_id == Uuid::nil() {
+            if let Some(ft) = self.fixed_tenant {
+                stamped.tenant_id = ft;
+            }
         }
 
         // Defense-in-depth: reject the RS separator (0x1E) in free-text fields.
@@ -187,7 +215,7 @@ impl LocalSink {
               resource_type, resource_id, outcome, actor_ip, occurred_at, metadata, \
               prev_hash, entry_hash, chain_epoch, idempotency_key, created_at) \
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) \
-             ON CONFLICT (idempotency_key) DO NOTHING",
+             ON CONFLICT (tenant_id, idempotency_key) DO NOTHING",
         )
         .bind(record.id)
         .bind(record.event.tenant_id)
@@ -228,7 +256,7 @@ impl LocalSink {
         Ok(record)
     }
 
-    /// Record an audit event in its own transaction.
+    /// No atomicity guarantee with surrounding business writes — prefer `record_in_tx` when you hold a transaction.
     pub async fn record(&self, event: &AuditEvent) -> Result<AuditRecord, AuditPgError> {
         let mut tx = self.pool.begin().await?;
         let rec = self.record_in_tx(event, &mut tx).await?;
@@ -321,6 +349,33 @@ impl LocalSink {
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    /// `list` using the fixed tenant set on this sink.
+    ///
+    /// Returns `AuditPgError::Env` if this sink was not constructed with
+    /// [`LocalSink::new_single_tenant`].
+    pub async fn list_default(
+        &self,
+        event_type: Option<&str>,
+        cursor: Option<i64>,
+        limit: i64,
+    ) -> Result<(Vec<AuditRecord>, Option<i64>), AuditPgError> {
+        let tenant_id = self
+            .fixed_tenant
+            .ok_or_else(|| AuditPgError::Env("no fixed_tenant set on this LocalSink".into()))?;
+        self.list(tenant_id, event_type, cursor, limit).await
+    }
+
+    /// `verify` using the fixed tenant set on this sink.
+    ///
+    /// Returns `AuditPgError::Env` if this sink was not constructed with
+    /// [`LocalSink::new_single_tenant`].
+    pub async fn verify_default(&self) -> Result<VerifyResult, AuditPgError> {
+        let tenant_id = self
+            .fixed_tenant
+            .ok_or_else(|| AuditPgError::Env("no fixed_tenant set on this LocalSink".into()))?;
+        self.verify(tenant_id).await
     }
 
     /// Verify the HMAC chain for a tenant's audit log.

@@ -21,7 +21,7 @@ pub mod verify;
 
 // Public API re-exports
 pub use error::{AuditError, Result};
-pub use event::{AuditEvent, AuditRecord, Outcome};
+pub use event::{AuditEvent, AuditEventBuilder, AuditRecord, Outcome, idempotency_key};
 pub use verify::{ChainCursor, VerifyResult};
 
 pub use chain::{canonical_msg, compute_entry_hash, seal_record};

@@ -19,6 +19,10 @@ pub struct RelayConfig {
     /// // lock-hold time. For a batch of 50 at 30 s timeout each, worst-case is
     /// // ~25 min — tune batch_size and the HTTP timeout together.
     pub batch_size: i64,
+    /// After this many failed delivery attempts the row is dead-lettered
+    /// (stamped with `failed_permanently_at`) and skipped on future polls.
+    /// Default: 20.
+    pub max_attempts: u32,
 }
 
 impl Default for RelayConfig {
@@ -28,6 +32,7 @@ impl Default for RelayConfig {
             ingest_secret: String::new(),
             poll_interval: Duration::from_secs(5),
             batch_size: 50,
+            max_attempts: 20,
         }
     }
 }
@@ -38,6 +43,7 @@ pub(crate) struct OutboxRow {
     pub(crate) id: i64,
     pub(crate) payload: serde_json::Value,
     pub(crate) attempts: i32,
+    pub(crate) last_error: Option<String>,
 }
 
 /// Spawn the background relay loop.
@@ -93,10 +99,11 @@ async fn relay_once(
     // every poll cycle. The index on (next_retry_at) WHERE delivered_at IS NULL
     // makes this efficient.
     let rows = sqlx::query_as::<_, OutboxRow>(
-        "SELECT id, payload, attempts \
+        "SELECT id, payload, attempts, last_error \
          FROM soma_audit_outbox.events \
          WHERE delivered_at IS NULL \
            AND next_retry_at <= now() \
+           AND failed_permanently_at IS NULL \
          ORDER BY id \
          LIMIT $1 \
          FOR UPDATE SKIP LOCKED",
@@ -172,10 +179,39 @@ async fn post_row(
             } else {
                 let err_msg = format!("http {}", status.as_u16());
                 record_failure(tx, row, &err_msg).await;
+                maybe_dead_letter(tx, row, cfg).await;
             }
         }
         Err(e) => {
             record_failure(tx, row, &e.to_string()).await;
+            maybe_dead_letter(tx, row, cfg).await;
+        }
+    }
+}
+
+/// Stamp `failed_permanently_at` if this row has reached `max_attempts`.
+async fn maybe_dead_letter(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    row: &OutboxRow,
+    cfg: &RelayConfig,
+) {
+    // row.attempts is the count BEFORE this failure; record_failure just incremented it in DB.
+    if row.attempts + 1 >= cfg.max_attempts as i32 {
+        if let Err(e) = sqlx::query(
+            "UPDATE soma_audit_outbox.events SET failed_permanently_at = now() WHERE id = $1",
+        )
+        .bind(row.id)
+        .execute(&mut **tx)
+        .await
+        {
+            warn!(id = row.id, error = %e, "failed to dead-letter outbox row");
+        } else {
+            warn!(
+                id = row.id,
+                last_error = ?row.last_error,
+                "outbox row permanently dead-lettered after {} attempts",
+                row.attempts + 1
+            );
         }
     }
 }

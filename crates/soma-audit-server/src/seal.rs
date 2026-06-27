@@ -70,7 +70,7 @@ async fn sweep_once(state: &AppState, pool: &PgPool) -> anyhow::Result<()> {
             INSERT INTO soma_audit.audit_chain_seals
                 (id, tenant_id, up_to_seq_num, chain_head_hash, sealed_at, signature, public_key_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT DO NOTHING
+            ON CONFLICT (tenant_id, up_to_seq_num) DO NOTHING
             "#,
         )
         .bind(Uuid::new_v4())

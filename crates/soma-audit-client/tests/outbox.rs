@@ -219,4 +219,53 @@ mod db {
             .await
             .expect("cleanup");
     }
+
+    /// Item 7: a row stamped with `failed_permanently_at` is excluded from
+    /// future relay polls (`AND failed_permanently_at IS NULL`).
+    #[tokio::test]
+    async fn dead_lettered_row_skipped_by_poll() {
+        let Some(pool) = try_pool().await else {
+            eprintln!("TEST_DATABASE_URL not set — skipping DB test");
+            return;
+        };
+
+        install_outbox(&pool).await.expect("install_outbox");
+
+        let sink = RemoteSink::new(pool.clone());
+        let event = make_event();
+        sink.enqueue(&event).await.expect("enqueue");
+
+        // Stamp the row as permanently failed.
+        sqlx::query(
+            "UPDATE soma_audit_outbox.events \
+             SET failed_permanently_at = now() \
+             WHERE event_id = $1",
+        )
+        .bind(event.idempotency_key)
+        .execute(&pool)
+        .await
+        .expect("stamp dead-letter");
+
+        // The relay poll query must not return dead-lettered rows.
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM soma_audit_outbox.events \
+             WHERE delivered_at IS NULL \
+               AND next_retry_at <= now() \
+               AND failed_permanently_at IS NULL \
+               AND event_id = $1",
+        )
+        .bind(event.idempotency_key)
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+
+        assert_eq!(count, 0, "dead-lettered row must be excluded from relay poll");
+
+        // Cleanup.
+        sqlx::query("DELETE FROM soma_audit_outbox.events WHERE event_id = $1")
+            .bind(event.idempotency_key)
+            .execute(&pool)
+            .await
+            .expect("cleanup");
+    }
 }

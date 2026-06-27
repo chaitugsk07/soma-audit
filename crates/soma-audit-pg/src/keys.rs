@@ -1,4 +1,5 @@
 use ed25519_dalek::SigningKey;
+use rand::rngs::OsRng;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -25,6 +26,23 @@ impl AuditKeys {
             master_secret: Zeroizing::new(master_secret),
             signing_key: SigningKey::from_bytes(&signing_key),
         }
+    }
+
+    /// For embedded/local-only use: reads only `SOMA_AUDIT_MASTER_SECRET` and
+    /// generates an ephemeral Ed25519 signing key in-process.
+    ///
+    /// Use [`from_env`][Self::from_env] (which also reads `SOMA_AUDIT_SIGNING_KEY`)
+    /// when running soma-audit-server.
+    pub fn from_env_local() -> Result<Self, AuditPgError> {
+        let master_hex = std::env::var("SOMA_AUDIT_MASTER_SECRET")
+            .map_err(|_| AuditPgError::Env("SOMA_AUDIT_MASTER_SECRET not set".into()))?;
+        let master = decode_hex_32(&master_hex)
+            .map_err(|e| AuditPgError::Env(format!("SOMA_AUDIT_MASTER_SECRET: {e}")))?;
+        let signing_key = SigningKey::generate(&mut OsRng);
+        Ok(Self {
+            master_secret: Zeroizing::new(master),
+            signing_key,
+        })
     }
 
     pub fn from_env() -> Result<Self, AuditPgError> {
@@ -108,6 +126,15 @@ mod tests {
         f();
     }
 
+    fn with_master_only<F: FnOnce()>(master: &str, f: F) {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        #[allow(deprecated)]
+        env::set_var("SOMA_AUDIT_MASTER_SECRET", master);
+        #[allow(deprecated)]
+        env::remove_var("SOMA_AUDIT_SIGNING_KEY");
+        f();
+    }
+
     #[test]
     fn test_from_env_valid() {
         with_env(&"a".repeat(64), &"b".repeat(64), || {
@@ -129,6 +156,22 @@ mod tests {
             let err = AuditKeys::from_env().unwrap_err();
             assert!(err.to_string().contains("invalid hex"));
         });
+    }
+
+    #[test]
+    fn test_from_env_local_valid() {
+        with_master_only(&"a".repeat(64), || {
+            assert!(AuditKeys::from_env_local().is_ok());
+        });
+    }
+
+    #[test]
+    fn test_from_env_local_no_master() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        #[allow(deprecated)]
+        env::remove_var("SOMA_AUDIT_MASTER_SECRET");
+        let err = AuditKeys::from_env_local().unwrap_err();
+        assert!(err.to_string().contains("SOMA_AUDIT_MASTER_SECRET not set"));
     }
 
     #[test]

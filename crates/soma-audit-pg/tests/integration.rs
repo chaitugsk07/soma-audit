@@ -167,6 +167,90 @@ async fn test_append_only_trigger() {
     assert!(update_result.is_err(), "UPDATE should be blocked by trigger");
 }
 
+/// Item 4: single-tenant sink fills nil tenant_id from fixed_tenant.
+#[tokio::test]
+async fn test_single_tenant_nil_fill() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_single_tenant_nil_fill: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let tenant = Uuid::new_v4();
+    let sink = LocalSink::new_single_tenant(pool, make_keys(), "test-service", tenant);
+
+    // Build an event with nil tenant_id — the sink should fill it in.
+    let mut event = make_event(Uuid::nil());
+    event.idempotency_key = Uuid::new_v4(); // ensure unique
+
+    let rec = sink.record(&event).await.expect("record");
+    assert_eq!(rec.event.tenant_id, tenant, "nil tenant_id should be replaced by fixed_tenant");
+
+    // verify_default should work without an explicit tenant_id arg.
+    let result = sink.verify_default().await.expect("verify_default");
+    assert!(result.ok);
+    assert!(result.entries_checked >= 1);
+}
+
+/// Item 5: same idempotency_key under two different tenants both insert.
+#[tokio::test]
+async fn test_cross_tenant_idempotency_key_both_insert() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_cross_tenant_idempotency_key_both_insert: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let sink = LocalSink::new(pool, make_keys(), "test-service");
+    let tenant_a = Uuid::new_v4();
+    let tenant_b = Uuid::new_v4();
+    let shared_key = Uuid::new_v4();
+
+    let mut ev_a = make_event(tenant_a);
+    ev_a.idempotency_key = shared_key;
+    let mut ev_b = make_event(tenant_b);
+    ev_b.idempotency_key = shared_key;
+
+    let r_a = sink.record(&ev_a).await.expect("record tenant_a");
+    let r_b = sink.record(&ev_b).await.expect("record tenant_b should also succeed");
+
+    // Both records should have been inserted (different tenants → not a conflict).
+    assert_ne!(r_a.id, r_b.id, "cross-tenant same key must produce two distinct records");
+}
+
+/// Item 5: same idempotency_key same tenant deduplicates.
+#[tokio::test]
+async fn test_same_tenant_idempotency_key_dedupes() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_same_tenant_idempotency_key_dedupes: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let sink = LocalSink::new(pool, make_keys(), "test-service");
+    let tenant = Uuid::new_v4();
+    let event = make_event(tenant);
+
+    let r1 = sink.record(&event).await.expect("first record");
+    let r2 = sink.record(&event).await.expect("second record (idempotent)");
+    assert_eq!(r1.id, r2.id, "same tenant+key must return the same record");
+}
+
 /// BUG 1 + BUG 2 regression test.
 ///
 /// Records events for two tenants, then runs the seal-sweep SELECT (with
