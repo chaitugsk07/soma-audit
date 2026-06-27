@@ -1,0 +1,66 @@
+# One-command DEMO of soma-audit: Postgres + the central server with the
+# embedded admin dashboard ("explorer"). No .env, no secret generation — this
+# file ships throwaway demo secrets inline so it runs with a single command.
+#
+#   docker compose -f soma-audit/deploy/docker-compose.demo.yml up --build
+#
+# Run it from the soma-platform/ PARENT directory (the build context must
+# contain both soma-audit/ and soma-schema/ — soma-audit has a path dep on
+# soma-schema). Then open:
+#
+#   http://localhost:8080/         → the dashboard ("explorer"). Enter the
+#                                     admin token below when prompted.
+#   admin token   : demo-admin-token
+#   ingest secret : demo-ingest-secret   (Bearer for POST /internal/v1/events)
+#
+# The dashboard opens empty until events exist. Seed a few from the host with
+# the notes-app example, or curl the ingest endpoint — see deploy/DEMO.md.
+#
+# ⚠️  DEMO ONLY. The secrets below are public and hard-coded. Never use this
+#     compose file in production — use docker-compose.yml with real secrets.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: soma
+      POSTGRES_PASSWORD: soma
+      POSTGRES_DB: soma_audit
+    ports:
+      # Host port is overridable so the demo doesn't clash with a Postgres you
+      # already run on 5432:  DEMO_PG_PORT=5433 docker compose -f ... up
+      - "${DEMO_PG_PORT:-5432}:5432"
+    # No named volume: the demo is ephemeral and starts clean each `up`.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U soma -d soma_audit"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  soma-audit-server:
+    build:
+      # Build context is the soma-platform/ parent (one level up from this
+      # file's repo) so the soma-schema sibling is included.
+      context: ../..
+      dockerfile: soma-audit/deploy/Dockerfile
+    ports:
+      # Dashboard host port (override with DEMO_HTTP_PORT if 8080 is taken).
+      - "${DEMO_HTTP_PORT:-8080}:8080"
+    environment:
+      DATABASE_URL: postgres://soma:soma@postgres:5432/soma_audit
+      # Fixed throwaway demo secrets (64 hex chars = 32 bytes for the two keys).
+      SOMA_AUDIT_MASTER_SECRET: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+      SOMA_AUDIT_SIGNING_KEY: "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100"
+      SOMA_AUDIT_INGEST_SECRET: "demo-ingest-secret"
+      SOMA_AUDIT_ADMIN_TOKEN: "demo-admin-token"
+      SOMA_AUDIT_BIND: "0.0.0.0:8080"
+      RUST_LOG: "info,sqlx=warn"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
