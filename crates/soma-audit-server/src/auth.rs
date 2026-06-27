@@ -1,4 +1,6 @@
 use axum::extract::Request;
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use crate::{error::ApiError, state::AppState};
 
@@ -18,7 +20,59 @@ pub fn extract_bearer(req: &Request) -> Option<&str> {
         .and_then(|v| v.strip_prefix("Bearer "))
 }
 
-/// Check ingest bearer token.
+/// Identity established after ingest authentication.
+pub enum IngestIdentity {
+    /// Authenticated with the shared master ingest secret.
+    Master,
+    /// Authenticated with a per-source key bound to a specific service/tenant.
+    Source { source_service: String, tenant_id: Uuid },
+}
+
+/// Authenticate an ingest request.
+///
+/// - Master secret (constant-time compare): returns `IngestIdentity::Master`.
+/// - Per-source key (SHA-256 hash lookup): returns `IngestIdentity::Source`.
+/// - Otherwise: `ApiError::Unauthorized`.
+///
+/// Takes the bearer token as an owned `String` and a clone of `AppState` so
+/// the returned future is `'static` (required by axum's `Handler` trait).
+pub async fn authenticate_ingest(
+    state: AppState,
+    token: Option<String>,
+) -> Result<IngestIdentity, ApiError> {
+    let token = token.ok_or(ApiError::Unauthorized)?;
+
+    // Fast path: master secret (constant-time compare).
+    if ct_eq(&token, &state.ingest_secret) {
+        return Ok(IngestIdentity::Master);
+    }
+
+    // Slow path: per-source key — hash and look up in DB.
+    let hash_bytes = Sha256::digest(token.as_bytes());
+    let hash: String = hash_bytes.iter().map(|b| format!("{b:02x}")).collect();
+
+    let row: Option<(String, Uuid)> = sqlx::query_as(
+        "SELECT source_service, tenant_id \
+         FROM soma_audit.source_keys \
+         WHERE key_hash = $1 AND revoked_at IS NULL",
+    )
+    .bind(&hash)
+    .fetch_optional(state.sink.pool())
+    .await
+    .map_err(|e| {
+        tracing::error!("source_keys lookup failed: {e}");
+        ApiError::Internal
+    })?;
+
+    match row {
+        Some((source_service, tenant_id)) => {
+            Ok(IngestIdentity::Source { source_service, tenant_id })
+        }
+        None => Err(ApiError::Unauthorized),
+    }
+}
+
+/// Check ingest bearer token (master secret only — backwards compat).
 pub fn check_ingest_auth(state: &AppState, req: &Request) -> Result<(), ApiError> {
     match extract_bearer(req) {
         Some(tok) if ct_eq(tok, &state.ingest_secret) => Ok(()),

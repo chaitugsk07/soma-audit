@@ -9,8 +9,9 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use crate::{
     ingest::post_event,
     portal::portal_handler,
-    query::{get_keys, list_events, verify_chain},
+    query::{get_keys, list_events, list_global, verify_chain},
     seal::list_seals,
+    source_keys::{mint_key, revoke_key},
     sources::{heartbeat, list_sources, register_source},
     state::AppState,
 };
@@ -27,7 +28,7 @@ pub fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
         .filter_map(|o| HeaderValue::from_str(o).ok())
         .collect();
     CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
         .allow_headers([
             HeaderName::from_static("authorization"),
             HeaderName::from_static("content-type"),
@@ -46,10 +47,12 @@ pub fn router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/internal/v1/sources/register", post(register_source))
         .route("/internal/v1/heartbeat", post(heartbeat))
         .route("/v1/audit", get(list_events))
+        .route("/v1/audit/global", get(list_global))
         .route("/v1/audit/verify", get(verify_chain))
         .route("/v1/audit/keys", get(get_keys))
         .route("/v1/audit/seals", get(list_seals))
         .route("/v1/sources", get(list_sources))
+        .route("/v1/sources/keys", post(mint_key).delete(revoke_key))
         .fallback(portal_handler)
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(TraceLayer::new_for_http())

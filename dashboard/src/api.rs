@@ -125,13 +125,14 @@ pub async fn get_health() -> bool {
 }
 
 /// GET /v1/audit — list audit records for a tenant.
-/// Wired filters: tenant_id (required), event_type, cursor, limit.
-/// NOTE: from/to date filters are NOT included — the server API does not yet
-/// support them. Add here when the API gains ?from=&to= params.
+/// Wired filters: tenant_id (required), event_type, source_service, from, to, cursor, limit.
 pub async fn get_audit(
     token: &str,
     tenant_id: &str,
     event_type: Option<&str>,
+    source_service: Option<&str>,
+    from: Option<&str>,
+    to: Option<&str>,
     cursor: Option<i64>,
     limit: u32,
 ) -> Result<Page<AuditRecord>, ApiError> {
@@ -139,6 +140,58 @@ pub async fn get_audit(
     if let Some(et) = event_type {
         if !et.is_empty() {
             url.push_str(&format!("&event_type={}", et));
+        }
+    }
+    if let Some(ss) = source_service {
+        if !ss.is_empty() {
+            url.push_str(&format!("&source_service={}", ss));
+        }
+    }
+    if let Some(f) = from {
+        if !f.is_empty() {
+            url.push_str(&format!("&from={}", f));
+        }
+    }
+    if let Some(t) = to {
+        if !t.is_empty() {
+            url.push_str(&format!("&to={}", t));
+        }
+    }
+    if let Some(c) = cursor {
+        url.push_str(&format!("&cursor={}", c));
+    }
+    get_json::<Page<AuditRecord>>(&url, token).await
+}
+
+/// GET /v1/audit/global — list audit records across all tenants (admin fleet view).
+pub async fn get_audit_global(
+    token: &str,
+    event_type: Option<&str>,
+    source_service: Option<&str>,
+    from: Option<&str>,
+    to: Option<&str>,
+    cursor: Option<i64>,
+    limit: u32,
+) -> Result<Page<AuditRecord>, ApiError> {
+    let mut url = format!("/v1/audit/global?limit={}", limit);
+    if let Some(et) = event_type {
+        if !et.is_empty() {
+            url.push_str(&format!("&event_type={}", et));
+        }
+    }
+    if let Some(ss) = source_service {
+        if !ss.is_empty() {
+            url.push_str(&format!("&source_service={}", ss));
+        }
+    }
+    if let Some(f) = from {
+        if !f.is_empty() {
+            url.push_str(&format!("&from={}", f));
+        }
+    }
+    if let Some(t) = to {
+        if !t.is_empty() {
+            url.push_str(&format!("&to={}", t));
         }
     }
     if let Some(c) = cursor {

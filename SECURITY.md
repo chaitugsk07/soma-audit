@@ -159,3 +159,54 @@ patch is available, or until 90 days after the initial report (whichever comes
 first), following the Google Project Zero policy.
 
 We do not currently have a bug bounty program.
+
+---
+
+## Ingest authentication
+
+### Shared master key (bootstrap)
+
+The environment variable `SOMA_AUDIT_INGEST_SECRET` is the shared master ingest key.
+Any bearer token matching this value is trusted to post events for any source service or tenant.
+Use this key only for initial bootstrap, admin tooling, and the soma-audit-client relay.
+Rotate it by updating the env var and restarting the server.
+
+### Per-source ingest keys
+
+Each application that posts audit events should use its own ingest key rather than the shared master secret.
+
+#### Minting a key
+
+```http
+POST /v1/sources/keys
+Authorization: Bearer <SOMA_AUDIT_ADMIN_TOKEN>
+Content-Type: application/json
+
+{"source_service": "my-app", "tenant_id": "<uuid>"}
+```
+
+Response returns `{ "key": "<64-char hex>", "source_service": "...", "tenant_id": "..." }`.
+The plaintext key is shown exactly once and is never stored on the server.
+
+#### Source binding enforcement
+
+A per-source key may only post events where `source_service` and `tenant_id` match the values registered at key-mint time.
+Any mismatch (impersonation attempt) is rejected with HTTP 403 Forbidden.
+
+#### Storage
+
+Keys are stored as SHA-256 hashes only. The plaintext is discarded immediately after minting.
+
+#### Revocation
+
+```http
+DELETE /v1/sources/keys?source_service=my-app&tenant_id=<uuid>
+Authorization: Bearer <SOMA_AUDIT_ADMIN_TOKEN>
+```
+
+Returns 204. Revoked keys are rejected immediately with HTTP 401.
+
+## Admin token
+
+`SOMA_AUDIT_ADMIN_TOKEN` gates read endpoints (`/v1/audit`, `/v1/sources`) and key management.
+All bearer-token comparisons use constant-time equality (`subtle::ConstantTimeEq`) to prevent timing oracles.

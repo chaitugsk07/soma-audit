@@ -3,10 +3,11 @@ use axum::{
     Json,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use soma_audit_pg::{AuditRecord, VerifyResult};
+use soma_audit_pg::{AuditRecord, ListFilter, VerifyResult};
 
 use crate::{auth::check_admin_auth, error::ApiError, state::AppState};
 
@@ -14,6 +15,9 @@ use crate::{auth::check_admin_auth, error::ApiError, state::AppState};
 pub struct ListParams {
     pub tenant_id: Uuid,
     pub event_type: Option<String>,
+    pub source_service: Option<String>,
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
     pub cursor: Option<i64>,
     pub limit: Option<i64>,
 }
@@ -32,12 +36,56 @@ pub async fn list_events(
     check_admin_auth(&state, &req)?;
 
     let limit = params.limit.unwrap_or(100).clamp(1, 500);
+    let filter = ListFilter {
+        event_type: params.event_type.as_deref(),
+        source_service: params.source_service.as_deref(),
+        from: params.from,
+        to: params.to,
+        cursor: params.cursor,
+    };
     let (items, next_cursor) = state
         .sink
-        .list(params.tenant_id, params.event_type.as_deref(), params.cursor, limit)
+        .list(params.tenant_id, filter, limit)
         .await
         .map_err(|e| {
             tracing::error!("failed to list events: {e}");
+            ApiError::Internal
+        })?;
+
+    Ok(Json(ListResponse { items, next_cursor }))
+}
+
+#[derive(Deserialize)]
+pub struct GlobalListParams {
+    pub event_type: Option<String>,
+    pub source_service: Option<String>,
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    pub cursor: Option<i64>,
+    pub limit: Option<i64>,
+}
+
+pub async fn list_global(
+    State(state): State<AppState>,
+    Query(params): Query<GlobalListParams>,
+    req: Request,
+) -> Result<Json<ListResponse>, ApiError> {
+    check_admin_auth(&state, &req)?;
+
+    let limit = params.limit.unwrap_or(100).clamp(1, 500);
+    let filter = ListFilter {
+        event_type: params.event_type.as_deref(),
+        source_service: params.source_service.as_deref(),
+        from: params.from,
+        to: params.to,
+        cursor: params.cursor,
+    };
+    let (items, next_cursor) = state
+        .sink
+        .list_global(filter, limit)
+        .await
+        .map_err(|e| {
+            tracing::error!("failed to list global events: {e}");
             ApiError::Internal
         })?;
 

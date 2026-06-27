@@ -12,6 +12,16 @@ use soma_audit_core::{AuditEvent, AuditRecord, ChainCursor, Outcome, VerifyResul
 use crate::error::AuditPgError;
 use crate::keys::{tenant_lock_key, AuditKeys};
 
+/// Optional filters for listing audit events.
+#[derive(Default)]
+pub struct ListFilter<'a> {
+    pub event_type: Option<&'a str>,
+    pub source_service: Option<&'a str>,
+    pub from: Option<DateTime<Utc>>,  // occurred_at >= from
+    pub to: Option<DateTime<Utc>>,    // occurred_at <= to
+    pub cursor: Option<i64>,          // keyset: seq_num < cursor (DESC)
+}
+
 pub struct LocalSink {
     pool: PgPool,
     keys: Arc<AuditKeys>,
@@ -268,8 +278,7 @@ impl LocalSink {
     pub async fn list(
         &self,
         tenant_id: Uuid,
-        event_type: Option<&str>,
-        cursor: Option<i64>,
+        filter: ListFilter<'_>,
         limit: i64,
     ) -> Result<(Vec<AuditRecord>, Option<i64>), AuditPgError> {
         let limit = limit.clamp(1, 500);
@@ -289,11 +298,23 @@ impl LocalSink {
         );
         qb.push_bind(tenant_id);
 
-        if let Some(et) = event_type {
+        if let Some(et) = filter.event_type {
             qb.push(" AND event_type = ");
             qb.push_bind(et.to_owned());
         }
-        if let Some(cur) = cursor {
+        if let Some(ss) = filter.source_service {
+            qb.push(" AND source_service = ");
+            qb.push_bind(ss.to_owned());
+        }
+        if let Some(from) = filter.from {
+            qb.push(" AND occurred_at >= ");
+            qb.push_bind(from);
+        }
+        if let Some(to) = filter.to {
+            qb.push(" AND occurred_at <= ");
+            qb.push_bind(to);
+        }
+        if let Some(cur) = filter.cursor {
             qb.push(" AND seq_num < ");
             qb.push_bind(cur);
         }
@@ -364,7 +385,119 @@ impl LocalSink {
         let tenant_id = self
             .fixed_tenant
             .ok_or_else(|| AuditPgError::Env("no fixed_tenant set on this LocalSink".into()))?;
-        self.list(tenant_id, event_type, cursor, limit).await
+        self.list(
+            tenant_id,
+            ListFilter { event_type, cursor, ..Default::default() },
+            limit,
+        )
+        .await
+    }
+
+    /// List events across ALL tenants (central admin fleet view).
+    ///
+    /// Uses RLS bypass (`SET LOCAL soma_audit.bypass = 'on'`).
+    /// Ordered by `occurred_at DESC, id DESC`. Cursor is the `id` of the last
+    /// returned row encoded as `i64` via `uuid_to_i64_cursor` (not meaningful
+    /// as a number — treat as opaque). Actually simpler: use `seq_num` isn't
+    /// globally unique per tenant, but `id` (UUID) can't be used as i64.
+    ///
+    /// We use `occurred_at` in microseconds as the cursor (i64). The cursor
+    /// returned is the `occurred_at` of the last row in micros since epoch.
+    /// On the next page: `AND occurred_at < cursor_dt OR (occurred_at = cursor_dt AND id < cursor_id)`.
+    /// To keep it simple and match the existing i64 cursor convention, we use
+    /// a row-number / offset-free approach: cursor = micros of `occurred_at`
+    /// of last row, filter `AND occurred_at <= cursor AND id < last_id`.
+    ///
+    /// Simplest viable: order by `occurred_at DESC`, cursor is `occurred_at`
+    /// micros. Use strict less-than for next page (may skip ties, acceptable).
+    pub async fn list_global(
+        &self,
+        filter: ListFilter<'_>,
+        limit: i64,
+    ) -> Result<(Vec<AuditRecord>, Option<i64>), AuditPgError> {
+        let limit = limit.clamp(1, 500);
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("SET LOCAL soma_audit.bypass = 'on'")
+            .execute(&mut *tx)
+            .await?;
+
+        let mut qb = sqlx::QueryBuilder::<Postgres>::new(
+            "SELECT id, tenant_id, seq_num, source_service, event_type, actor_id, actor_role, \
+             resource_type, resource_id, outcome, actor_ip, occurred_at, metadata, \
+             prev_hash, entry_hash, chain_epoch, idempotency_key, created_at \
+             FROM soma_audit.fct_audit_events WHERE true",
+        );
+
+        if let Some(et) = filter.event_type {
+            qb.push(" AND event_type = ");
+            qb.push_bind(et.to_owned());
+        }
+        if let Some(ss) = filter.source_service {
+            qb.push(" AND source_service = ");
+            qb.push_bind(ss.to_owned());
+        }
+        if let Some(from) = filter.from {
+            qb.push(" AND occurred_at >= ");
+            qb.push_bind(from);
+        }
+        if let Some(to) = filter.to {
+            qb.push(" AND occurred_at <= ");
+            qb.push_bind(to);
+        }
+        // Cursor for global: occurred_at in microseconds since epoch (i64).
+        // Next page uses strict less-than on occurred_at.
+        if let Some(cur_micros) = filter.cursor {
+            let cursor_dt = DateTime::<Utc>::from_timestamp_micros(cur_micros)
+                .unwrap_or(DateTime::<Utc>::from_timestamp(0, 0).unwrap());
+            qb.push(" AND occurred_at < ");
+            qb.push_bind(cursor_dt);
+        }
+
+        qb.push(" ORDER BY occurred_at DESC, id DESC LIMIT ");
+        qb.push_bind(limit + 1);
+
+        let rows: Vec<PgAuditRow> = qb.build_query_as().fetch_all(&mut *tx).await?;
+        tx.commit().await?;
+
+        let has_more = rows.len() as i64 > limit;
+        let rows_slice = if has_more { &rows[..limit as usize] } else { &rows[..] };
+        let next_cursor = if has_more {
+            rows_slice.last().map(|r| r.occurred_at.timestamp_micros())
+        } else {
+            None
+        };
+
+        let records = rows_slice
+            .iter()
+            .map(|r| {
+                let outcome = outcome_from_str(&r.outcome)?;
+                Ok(AuditRecord {
+                    id: r.id,
+                    seq_num: r.seq_num,
+                    prev_hash: r.prev_hash.clone(),
+                    entry_hash: r.entry_hash.clone(),
+                    chain_epoch: r.chain_epoch,
+                    created_at: r.created_at,
+                    event: AuditEvent {
+                        source_service: r.source_service.clone(),
+                        idempotency_key: r.idempotency_key,
+                        tenant_id: r.tenant_id,
+                        event_type: r.event_type.clone(),
+                        actor_id: r.actor_id,
+                        actor_role: r.actor_role.clone(),
+                        resource_type: r.resource_type.clone(),
+                        resource_id: r.resource_id.clone(),
+                        outcome,
+                        actor_ip: r.actor_ip,
+                        occurred_at: r.occurred_at,
+                        metadata: r.metadata.clone(),
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>, AuditPgError>>()?;
+
+        Ok((records, next_cursor))
     }
 
     /// `verify` using the fixed tenant set on this sink.

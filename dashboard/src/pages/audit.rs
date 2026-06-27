@@ -1,8 +1,7 @@
 //! Audit Events page — the main view for browsing the append-only audit log.
 //!
-//! Filters wired to the server API: tenant_id (from shell), event_type (text input), cursor, limit.
-//! NOT wired: date range (from/to) — the /v1/audit endpoint does not yet support from= or to=
-//! params. Add date filter UI here once the server API is extended.
+//! Filters wired to the server API: tenant_id (from shell), event_type, source_service,
+//! from, to (date range), cursor, limit.
 
 use crate::api::{get_audit, AuditRecord, Page};
 use crate::app::AppCtx;
@@ -45,6 +44,9 @@ pub fn AuditPage() -> impl IntoView {
     let ctx = use_context::<AppCtx>().expect("AppCtx required");
 
     let event_type_filter = RwSignal::new(String::new());
+    let source_service_filter = RwSignal::new(String::new());
+    let from_filter = RwSignal::new(String::new());
+    let to_filter = RwSignal::new(String::new());
     let cursor: RwSignal<Option<i64>> = RwSignal::new(None);
     let events: RwSignal<Vec<AuditRecord>> = RwSignal::new(vec![]);
     let next_cursor: RwSignal<Option<i64>> = RwSignal::new(None);
@@ -61,6 +63,9 @@ pub fn AuditPage() -> impl IntoView {
             return;
         }
         let et = event_type_filter.get();
+        let ss = source_service_filter.get();
+        let from = from_filter.get();
+        let to = to_filter.get();
         let cur = if append { cursor.get() } else { None };
         loading.set(true);
         load_err.set(None);
@@ -69,6 +74,9 @@ pub fn AuditPage() -> impl IntoView {
                 &token,
                 &tenant,
                 if et.is_empty() { None } else { Some(&et) },
+                if ss.is_empty() { None } else { Some(&ss) },
+                if from.is_empty() { None } else { Some(&from) },
+                if to.is_empty() { None } else { Some(&to) },
                 cur,
                 50,
             )
@@ -119,6 +127,24 @@ pub fn AuditPage() -> impl IntoView {
                     <Input
                         value=event_type_filter
                         placeholder="event_type filter".to_string()
+                    />
+                </div>
+                <div class="w-48">
+                    <Input
+                        value=source_service_filter
+                        placeholder="source_service filter".to_string()
+                    />
+                </div>
+                <div class="w-44">
+                    <Input
+                        value=from_filter
+                        placeholder="from (RFC3339)".to_string()
+                    />
+                </div>
+                <div class="w-44">
+                    <Input
+                        value=to_filter
+                        placeholder="to (RFC3339)".to_string()
                     />
                 </div>
                 <Button

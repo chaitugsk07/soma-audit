@@ -14,7 +14,11 @@ use uuid::Uuid;
 use soma_audit_core::Outcome;
 use soma_audit_pg::AuditEvent;
 
-use crate::{auth::check_ingest_auth, error::ApiError, state::AppState};
+use crate::{
+    auth::{authenticate_ingest, extract_bearer, IngestIdentity},
+    error::ApiError,
+    state::AppState,
+};
 
 #[derive(Deserialize)]
 pub struct IngestRequest {
@@ -52,7 +56,11 @@ pub async fn post_event(
     State(state): State<AppState>,
     req: Request,
 ) -> Result<impl IntoResponse, ApiError> {
-    check_ingest_auth(&state, &req)?;
+    // Extract bearer token before consuming the request body. AppState is
+    // Clone (Arc-backed), so we pass an owned copy to authenticate_ingest,
+    // keeping the future 'static as axum's Handler trait requires.
+    let token = extract_bearer(&req).map(str::to_owned);
+    let identity = authenticate_ingest(state.clone(), token).await?;
 
     let (_, body) = req.into_parts();
     let bytes = axum::body::to_bytes(body, 1024 * 1024)
@@ -61,6 +69,15 @@ pub async fn post_event(
 
     let payload: IngestRequest = serde_json::from_slice(&bytes)
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    // Per-source key: enforce source binding — the key may only post events
+    // for its registered (source_service, tenant_id). Any mismatch is an
+    // impersonation attempt and must be rejected with 403.
+    if let IngestIdentity::Source { source_service, tenant_id } = &identity {
+        if payload.source_service != *source_service || payload.tenant_id != *tenant_id {
+            return Err(ApiError::Forbidden);
+        }
+    }
 
     // Reject any free-text field containing the RS separator (0x1E).  The
     // canonical chain message joins fields with RS; injecting it into a field

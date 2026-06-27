@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use uuid::Uuid;
 
-use soma_audit_pg::{AuditEvent, AuditKeys, LocalSink, Outcome, install};
+use soma_audit_pg::{AuditEvent, AuditKeys, ListFilter, LocalSink, Outcome, install};
 
 fn test_db_url() -> Option<String> {
     std::env::var("TEST_DATABASE_URL").ok()
@@ -337,5 +337,151 @@ async fn test_seal_sweep_tip_hash_and_rls_bypass() {
     assert_eq!(
         row_b.1, tip_b.seq_num,
         "tenant_b up_to_seq must equal tip seq_num"
+    );
+}
+
+/// ListFilter: source_service filter returns only matching events.
+#[tokio::test]
+async fn test_list_filter_source_service() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_list_filter_source_service: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let sink = LocalSink::new(pool, make_keys(), "test-service");
+    let tenant = Uuid::new_v4();
+
+    // Insert two events with different source_service values.
+    let mut ev_alpha = make_event(tenant);
+    ev_alpha.source_service = "svc-alpha".into();
+    let mut ev_beta = make_event(tenant);
+    ev_beta.source_service = "svc-beta".into();
+
+    sink.record(&ev_alpha).await.expect("record alpha");
+    sink.record(&ev_beta).await.expect("record beta");
+
+    let (records, _) = sink
+        .list(
+            tenant,
+            ListFilter { source_service: Some("svc-alpha"), ..Default::default() },
+            50,
+        )
+        .await
+        .expect("list");
+
+    assert!(!records.is_empty(), "should have at least one result");
+    for r in &records {
+        assert_eq!(r.event.source_service, "svc-alpha", "all results must match filter");
+    }
+}
+
+/// ListFilter: date range (from/to) filters events by occurred_at.
+#[tokio::test]
+async fn test_list_filter_date_range() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_list_filter_date_range: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let sink = LocalSink::new(pool, make_keys(), "test-service");
+    let tenant = Uuid::new_v4();
+
+    let now = chrono::Utc::now();
+    let past = now - chrono::Duration::hours(2);
+    let future = now + chrono::Duration::hours(2);
+
+    // Event in the past
+    let mut ev_past = make_event(tenant);
+    ev_past.occurred_at = past;
+    sink.record(&ev_past).await.expect("record past");
+
+    // Event in the future
+    let mut ev_future = make_event(tenant);
+    ev_future.occurred_at = future;
+    sink.record(&ev_future).await.expect("record future");
+
+    // Query for events in [past - 1h, past + 1h] — should only get the past event.
+    let from = past - chrono::Duration::hours(1);
+    let to = past + chrono::Duration::hours(1);
+
+    let (records, _) = sink
+        .list(
+            tenant,
+            ListFilter { from: Some(from), to: Some(to), ..Default::default() },
+            50,
+        )
+        .await
+        .expect("list");
+
+    assert!(!records.is_empty(), "should have at least one result in range");
+    for r in &records {
+        assert!(
+            r.event.occurred_at >= from && r.event.occurred_at <= to,
+            "occurred_at must be within [from, to]"
+        );
+    }
+}
+
+/// list_global: returns events from multiple tenants.
+#[tokio::test]
+async fn test_list_global_cross_tenant() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_list_global_cross_tenant: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let sink = LocalSink::new(pool, make_keys(), "test-service");
+    let tenant_a = Uuid::new_v4();
+    let tenant_b = Uuid::new_v4();
+
+    // Give each event a distinct source_service so we can narrow the global query
+    // to just these two tenants without polluting from parallel tests.
+    let tag = Uuid::new_v4().to_string();
+    let svc_name = format!("global-test-{}", &tag[..8]);
+
+    let mut ev_a = make_event(tenant_a);
+    ev_a.source_service = svc_name.clone();
+    let mut ev_b = make_event(tenant_b);
+    ev_b.source_service = svc_name.clone();
+
+    sink.record(&ev_a).await.expect("record tenant_a");
+    sink.record(&ev_b).await.expect("record tenant_b");
+
+    let (records, _) = sink
+        .list_global(
+            ListFilter { source_service: Some(&svc_name), ..Default::default() },
+            50,
+        )
+        .await
+        .expect("list_global");
+
+    let tenant_ids: std::collections::HashSet<uuid::Uuid> =
+        records.iter().map(|r| r.event.tenant_id).collect();
+
+    assert!(
+        tenant_ids.contains(&tenant_a),
+        "global list must include tenant_a"
+    );
+    assert!(
+        tenant_ids.contains(&tenant_b),
+        "global list must include tenant_b"
     );
 }

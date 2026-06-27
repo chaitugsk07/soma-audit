@@ -11,6 +11,7 @@ mod portal;
 mod query;
 mod routes;
 mod seal;
+mod source_keys;
 mod sources;
 mod state;
 

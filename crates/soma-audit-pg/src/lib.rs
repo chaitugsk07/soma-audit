@@ -9,6 +9,6 @@ mod sink;
 pub use error::{AuditPgError, InstallError};
 pub use install::install;
 pub use keys::AuditKeys;
-pub use sink::LocalSink;
+pub use sink::{ListFilter, LocalSink};
 
 pub use soma_audit_core::{AuditEvent, AuditRecord, Outcome, VerifyResult};
