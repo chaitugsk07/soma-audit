@@ -39,7 +39,11 @@ subtle = "2"
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "macros", "json", "ipnet"] }
-soma-schema = { path = "../soma-schema", default-features = false }
+# Local path for dev; version pin is for crates.io publish. NOTE: requires
+# soma-schema >= 0.4 (the version that adds Migrator::from_embedded) to be
+# published before soma-audit-pg / -client can be published. crates.io 0.3.0
+# does NOT have from_embedded.
+soma-schema = { path = "../soma-schema", version = "0.4", default-features = false }
 include_dir = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 futures = "0.3"
