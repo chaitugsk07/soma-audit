@@ -1,0 +1,54 @@
+# Deploy the marketing landing page (website/) to GitHub Pages.
+#
+# ONE-TIME SETUP (repo owner): Settings → Pages → Build and deployment →
+# Source: "GitHub Actions". After that, every push to main that touches
+# website/ publishes the site; you can also run it manually from the Actions
+# tab (workflow_dispatch).
+#
+# The site is the static contents of website/ (index.html + styles.css +
+# script.js), which use relative asset paths, so website/ is uploaded as the
+# Pages root verbatim — no build step.
+
+name: Deploy website
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "website/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# Allow the workflow to publish to Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One in-flight deployment at a time; don't cancel a running publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload website/ as the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
