@@ -11,6 +11,7 @@ mod portal;
 mod query;
 mod routes;
 mod seal;
+mod sources;
 mod state;
 
 use state::AppState;

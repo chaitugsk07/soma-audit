@@ -28,3 +28,10 @@ versions:
         created: "2026-06-26"
         author: "soma-audit"
         why: "Prevent duplicate seals for same (tenant, chain-head) from concurrent seal sweeps"
+  - version: 5
+    description: "Source service discovery table"
+    migrations:
+      - file: "20260626_05_sources.sql"
+        created: "2026-06-26"
+        author: "soma-audit"
+        why: "Track source services and tenants for the admin discovery dashboard"

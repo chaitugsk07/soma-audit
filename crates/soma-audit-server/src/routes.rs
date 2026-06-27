@@ -11,6 +11,7 @@ use crate::{
     portal::portal_handler,
     query::{get_keys, list_events, verify_chain},
     seal::list_seals,
+    sources::{heartbeat, list_sources, register_source},
     state::AppState,
 };
 
@@ -42,10 +43,13 @@ pub fn router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/health/live", get(health))
         .route("/health/ready", get(health_ready))
         .route("/internal/v1/events", post(post_event))
+        .route("/internal/v1/sources/register", post(register_source))
+        .route("/internal/v1/heartbeat", post(heartbeat))
         .route("/v1/audit", get(list_events))
         .route("/v1/audit/verify", get(verify_chain))
         .route("/v1/audit/keys", get(get_keys))
         .route("/v1/audit/seals", get(list_seals))
+        .route("/v1/sources", get(list_sources))
         .fallback(portal_handler)
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(TraceLayer::new_for_http())

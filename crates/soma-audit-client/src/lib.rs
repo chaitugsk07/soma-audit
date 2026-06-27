@@ -30,7 +30,7 @@ mod relay;
 
 pub use error::ClientError;
 pub use outbox::{install_outbox, RemoteSink};
-pub use relay::{spawn_relay, RelayConfig};
+pub use relay::{spawn_relay, RelayConfig, SourceRegistration};
 
 // Re-export core types so consumers only need one dependency.
 pub use soma_audit_core::{AuditEvent, Outcome};

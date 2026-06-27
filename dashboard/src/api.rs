@@ -171,3 +171,26 @@ pub async fn get_seals(
 pub async fn get_keys(token: &str) -> Result<KeysResponse, ApiError> {
     get_json::<KeysResponse>("/v1/audit/keys", token).await
 }
+
+/// Source record from GET /v1/sources.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct SourceRecord {
+    pub source_service: String,
+    pub tenant_id: String,
+    pub host_url: Option<String>,
+    pub version: Option<String>,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub event_count: i64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct SourcesResponse {
+    pub sources: Vec<SourceRecord>,
+}
+
+/// GET /v1/sources — list all source services.
+pub async fn get_sources(token: &str) -> Result<Vec<SourceRecord>, ApiError> {
+    let resp = get_json::<SourcesResponse>("/v1/sources", token).await?;
+    Ok(resp.sources)
+}

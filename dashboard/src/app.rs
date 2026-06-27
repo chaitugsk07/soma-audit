@@ -1,6 +1,6 @@
 //! App shell: router, sidebar, header with token + tenant inputs.
 
-use crate::pages::{AuditPage, KeysPage, SealsPage, VerifyPage};
+use crate::pages::{AuditPage, KeysPage, SealsPage, SourcesPage, VerifyPage};
 use crate::util::{local_storage_get, local_storage_set};
 use leptos::prelude::*;
 use leptos_router::{
@@ -21,6 +21,11 @@ pub struct AppCtx {
 
 fn sidebar_items() -> Vec<SidebarItem> {
     vec![
+        SidebarItem {
+            label: "Sources".to_string(),
+            href: "/sources".to_string(),
+            icon: Some(soma_ui::icons::icondata::LuServer),
+        },
         SidebarItem {
             label: "Audit Events".to_string(),
             href: "/audit".to_string(),
@@ -137,7 +142,8 @@ pub fn App() -> impl IntoView {
         <Router>
             <AppShell>
                 <FlatRoutes fallback=|| view! { <div class="text-muted-foreground">"Page not found"</div> }>
-                    <Route path=path!("/") view=|| view! { <Redirect path="/audit" /> } />
+                    <Route path=path!("/") view=|| view! { <Redirect path="/sources" /> } />
+                    <Route path=path!("/sources") view=SourcesPage />
                     <Route path=path!("/audit") view=AuditPage />
                     <Route path=path!("/verify") view=VerifyPage />
                     <Route path=path!("/seals") view=SealsPage />

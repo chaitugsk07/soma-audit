@@ -3,6 +3,15 @@ use std::time::Duration;
 use sqlx::PgPool;
 use tracing::{debug, warn};
 
+/// Metadata to register this relay instance with the central server on startup.
+#[derive(Debug, Clone)]
+pub struct SourceRegistration {
+    pub source_service: String,
+    pub tenant_id: uuid::Uuid,
+    pub host_url: Option<String>,
+    pub version: Option<String>,
+}
+
 /// Configuration for the background relay task.
 #[derive(Debug, Clone)]
 pub struct RelayConfig {
@@ -23,6 +32,10 @@ pub struct RelayConfig {
     /// (stamped with `failed_permanently_at`) and skipped on future polls.
     /// Default: 20.
     pub max_attempts: u32,
+    /// If `Some`, POST to `{central_url}/internal/v1/sources/register` on relay startup.
+    pub register: Option<SourceRegistration>,
+    /// If true, POST `/internal/v1/heartbeat` on each poll cycle where the outbox is empty.
+    pub heartbeat: bool,
 }
 
 impl Default for RelayConfig {
@@ -33,6 +46,8 @@ impl Default for RelayConfig {
             poll_interval: Duration::from_secs(5),
             batch_size: 50,
             max_attempts: 20,
+            register: None,
+            heartbeat: false,
         }
     }
 }
@@ -69,11 +84,52 @@ async fn relay_loop(pool: PgPool, cfg: RelayConfig) {
         .build()
         .expect("failed to build reqwest client");
 
-    let ingest_url = format!("{}/internal/v1/events", cfg.central_url.trim_end_matches('/'));
+    let base = cfg.central_url.trim_end_matches('/');
+    let ingest_url = format!("{}/internal/v1/events", base);
+    let register_url = format!("{}/internal/v1/sources/register", base);
+    let heartbeat_url = format!("{}/internal/v1/heartbeat", base);
+
+    // One-shot registration on startup.
+    if let Some(ref reg) = cfg.register {
+        let body = serde_json::json!({
+            "source_service": reg.source_service,
+            "tenant_id": reg.tenant_id,
+            "host_url": reg.host_url,
+            "version": reg.version,
+        });
+        if let Err(e) = client
+            .post(&register_url)
+            .bearer_auth(&cfg.ingest_secret)
+            .json(&body)
+            .send()
+            .await
+        {
+            warn!(error = %e, "source registration failed (non-fatal)");
+        }
+    }
 
     loop {
-        if let Err(e) = relay_once(&pool, &client, &ingest_url, &cfg).await {
-            warn!(error = %e, "relay cycle error");
+        match relay_once(&pool, &client, &ingest_url, &cfg).await {
+            Err(e) => warn!(error = %e, "relay cycle error"),
+            Ok(0) if cfg.heartbeat => {
+                // Outbox empty — send heartbeat if registration metadata is available.
+                if let Some(ref reg) = cfg.register {
+                    let body = serde_json::json!({
+                        "source_service": reg.source_service,
+                        "tenant_id": reg.tenant_id,
+                    });
+                    if let Err(e) = client
+                        .post(&heartbeat_url)
+                        .bearer_auth(&cfg.ingest_secret)
+                        .json(&body)
+                        .send()
+                        .await
+                    {
+                        warn!(error = %e, "heartbeat failed (non-fatal)");
+                    }
+                }
+            }
+            _ => {}
         }
         tokio::time::sleep(cfg.poll_interval).await;
     }
@@ -84,7 +140,7 @@ async fn relay_once(
     client: &reqwest::Client,
     ingest_url: &str,
     cfg: &RelayConfig,
-) -> Result<(), sqlx::Error> {
+) -> Result<usize, sqlx::Error> {
     // Bug 1 fix: open an explicit transaction so FOR UPDATE SKIP LOCKED holds
     // the row locks for the duration of processing. Without this the locks are
     // released immediately after the autocommit SELECT returns, letting two
@@ -115,7 +171,7 @@ async fn relay_once(
     if rows.is_empty() {
         // Nothing to do; commit the empty tx (no-op but tidy).
         tx.commit().await?;
-        return Ok(());
+        return Ok(0);
     }
 
     debug!(count = rows.len(), "relaying outbox rows");
@@ -134,12 +190,13 @@ async fn relay_once(
         );
     }
 
+    let count = rows.len();
     for row in &rows {
         post_row(&mut tx, client, ingest_url, cfg, row).await;
     }
 
     tx.commit().await?;
-    Ok(())
+    Ok(count)
 }
 
 /// Attempt to relay a single outbox row. Never propagates errors — failures are

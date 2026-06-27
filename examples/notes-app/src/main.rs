@@ -7,14 +7,23 @@
 //! ## The three lines that add audit to any app
 //!
 //! ```rust,ignore
-//! soma_audit_pg::install(&pool).await?;                              // 1
-//! let keys  = AuditKeys::from_env().unwrap_or_else(|_| demo_keys()); // 2
-//! let sink  = Arc::new(LocalSink::new(pool.clone(), Arc::new(keys), "notes-app")); // 3
+//! soma_audit_pg::install(&pool).await?;                               // 1
+//! let keys = AuditKeys::from_env().unwrap_or_else(|_| demo_keys());  // 2
+//! let sink = Arc::new(LocalSink::new(pool.clone(), Arc::new(keys), "notes-app")); // 3
 //! ```
 //!
 //! After that, wrap privileged writes in a transaction and call
 //! `sink.record_in_tx(&event, &mut tx)` — the note and its audit record commit
 //! together or not at all.
+//!
+//! ## Building an audit event
+//!
+//! ```rust,ignore
+//! let event = AuditEvent::builder(tenant_id, "note.create", Outcome::Success)
+//!     .actor_id(actor_id)
+//!     .resource("note", &note_id.to_string())
+//!     .build();
+//! ```
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -82,41 +91,6 @@ struct TenantQuery {
     tenant_id: Uuid,
 }
 
-// ---------------------------------------------------------------------------
-// Audit helper
-//
-// Builds an AuditEvent from the fields the call site already knows.
-// Idempotency key and timestamp are set here so callers don't have to think
-// about them.  source_service is left empty — the LocalSink stamps "notes-app"
-// automatically when it sees an empty string.
-//
-// In a real app you'd use a builder; this local helper keeps the demo
-// dependency-free.
-// ---------------------------------------------------------------------------
-
-fn audit_event(
-    tenant_id: Uuid,
-    actor_id: Option<Uuid>,
-    event_type: impl Into<String>,
-    resource_type: impl Into<String>,
-    resource_id: impl Into<String>,
-    outcome: Outcome,
-) -> AuditEvent {
-    AuditEvent {
-        source_service: String::new(), // sink fills in "notes-app"
-        idempotency_key: Uuid::new_v4(),
-        tenant_id,
-        event_type: event_type.into(),
-        actor_id,
-        actor_role: None,
-        resource_type: Some(resource_type.into()),
-        resource_id: Some(resource_id.into()),
-        outcome,
-        actor_ip: None,
-        occurred_at: Utc::now(),
-        metadata: json!({}),
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -172,14 +146,10 @@ async fn create_note(
 
     // 2. Record the audit event INSIDE the same transaction.
     //    The note and its audit record commit together or not at all.
-    let event = audit_event(
-        req.tenant_id,
-        Some(req.actor_id),
-        "note.create",
-        "note",
-        note_id.to_string(),
-        Outcome::Success,
-    );
+    let event = AuditEvent::builder(req.tenant_id, "note.create", Outcome::Success)
+        .actor_id(req.actor_id)
+        .resource("note", note_id.to_string())
+        .build();
     state
         .sink
         .record_in_tx(&event, &mut tx)
@@ -230,28 +200,20 @@ async fn delete_note(
         // Note not found — record a Denied event outside the (rolled-back) tx.
         // This uses the weaker record() path: committed in its own transaction,
         // so the audit event itself always lands even though there was nothing to delete.
-        let event = audit_event(
-            q.tenant_id,
-            Some(q.actor_id),
-            "note.delete",
-            "note",
-            id.to_string(),
-            Outcome::Denied,
-        );
+        let event = AuditEvent::builder(q.tenant_id, "note.delete", Outcome::Denied)
+            .actor_id(q.actor_id)
+            .resource("note", id.to_string())
+            .build();
         state.sink.record(&event).await.context("audit denied")?;
 
         return Ok(Json(json!({ "deleted": false, "reason": "not found" })));
     }
 
     // Note existed — audit and delete commit together.
-    let event = audit_event(
-        q.tenant_id,
-        Some(q.actor_id),
-        "note.delete",
-        "note",
-        id.to_string(),
-        Outcome::Success,
-    );
+    let event = AuditEvent::builder(q.tenant_id, "note.delete", Outcome::Success)
+        .actor_id(q.actor_id)
+        .resource("note", id.to_string())
+        .build();
     state
         .sink
         .record_in_tx(&event, &mut tx)
@@ -283,14 +245,9 @@ async fn list_notes(
     // Audit the read via record() — the non-tx path.
     // The SELECT already completed; this audit commit is a best-effort append.
     // Contrast with record_in_tx() on writes where the guarantee is atomic.
-    let event = audit_event(
-        q.tenant_id,
-        None,
-        "note.read",
-        "note",
-        "all",
-        Outcome::Success,
-    );
+    let event = AuditEvent::builder(q.tenant_id, "note.read", Outcome::Success)
+        .resource("note", "all")
+        .build();
     if let Err(e) = state.sink.record(&event).await {
         // Non-fatal: the read succeeded even if the audit event failed.
         warn!(err = %e, "failed to record note.read audit event");

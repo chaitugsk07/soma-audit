@@ -98,6 +98,20 @@ pub async fn post_event(
         ApiError::Internal
     })?;
 
+    // Best-effort source upsert — don't fail ingest if this errors.
+    if let Err(e) = sqlx::query(
+        "INSERT INTO soma_audit.sources (source_service, tenant_id) \
+         VALUES ($1, $2) \
+         ON CONFLICT (source_service, tenant_id) DO UPDATE SET last_seen = now()",
+    )
+    .bind(&event.source_service)
+    .bind(event.tenant_id)
+    .execute(state.sink.pool())
+    .await
+    {
+        tracing::warn!("source upsert failed: {e}");
+    }
+
     Ok((
         StatusCode::CREATED,
         Json(IngestResponse {
