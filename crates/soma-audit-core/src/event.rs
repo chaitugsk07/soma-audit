@@ -96,7 +96,11 @@ impl AuditEventBuilder {
         self
     }
 
-    pub fn resource(mut self, resource_type: impl Into<String>, resource_id: impl Into<String>) -> Self {
+    pub fn resource(
+        mut self,
+        resource_type: impl Into<String>,
+        resource_id: impl Into<String>,
+    ) -> Self {
         self.resource_type = Some(resource_type.into());
         self.resource_id = Some(resource_id.into());
         self
@@ -181,7 +185,10 @@ mod tests {
         assert_eq!(event.outcome, Outcome::Success);
         assert_eq!(event.source_service, "");
         assert!(event.actor_id.is_none());
-        assert_eq!(event.metadata, serde_json::Value::Object(Default::default()));
+        assert_eq!(
+            event.metadata,
+            serde_json::Value::Object(Default::default())
+        );
     }
 
     #[test]
@@ -232,6 +239,9 @@ mod tests {
         let t2 = Uuid::new_v4();
         let r = Uuid::new_v4();
         assert_ne!(idempotency_key(t1, r), idempotency_key(t2, r));
-        assert_ne!(idempotency_key(t1, Uuid::new_v4()), idempotency_key(t1, Uuid::new_v4()));
+        assert_ne!(
+            idempotency_key(t1, Uuid::new_v4()),
+            idempotency_key(t1, Uuid::new_v4())
+        );
     }
 }

@@ -4,8 +4,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::error::ClientError;
 
-static MIGRATIONS: soma_schema::include_dir::Dir =
-    include_dir!("$CARGO_MANIFEST_DIR/migrations");
+static MIGRATIONS: soma_schema::include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/migrations");
 
 /// Install the outbox schema and run migrations into the host's Postgres.
 ///

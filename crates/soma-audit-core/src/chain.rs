@@ -92,8 +92,7 @@ pub fn canonical_msg(
 
 /// HMAC-SHA256(`key`, `canonical`) → lowercase hex string.
 pub fn compute_entry_hash(canonical: &str, key: &[u8]) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(key)
-        .expect("HMAC accepts any key length");
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(canonical.as_bytes());
     to_hex(&mac.finalize().into_bytes())
 }
@@ -118,8 +117,7 @@ pub fn seal_record(
     created_at: DateTime<Utc>,
     key: &[u8],
 ) -> AuditRecord {
-    let metadata_json =
-        serde_json::to_string(&event.metadata).unwrap_or_else(|_| "{}".to_owned());
+    let metadata_json = serde_json::to_string(&event.metadata).unwrap_or_else(|_| "{}".to_owned());
     let canonical = canonical_msg(
         seq_num,
         event.tenant_id,
@@ -204,8 +202,14 @@ mod tests {
 
         // prev_hash chain is correct
         assert!(records[0].prev_hash.is_none());
-        assert_eq!(records[1].prev_hash.as_deref(), Some(records[0].entry_hash.as_str()));
-        assert_eq!(records[2].prev_hash.as_deref(), Some(records[1].entry_hash.as_str()));
+        assert_eq!(
+            records[1].prev_hash.as_deref(),
+            Some(records[0].entry_hash.as_str())
+        );
+        assert_eq!(
+            records[2].prev_hash.as_deref(),
+            Some(records[1].entry_hash.as_str())
+        );
 
         let result = crate::verify::verify_chain(&records, key);
         assert!(result.ok);
@@ -289,12 +293,36 @@ mod tests {
         let metadata = r#"{"key":"value"}"#;
 
         let msg1 = canonical_msg(
-            1, tenant_id, "svc", "evt", None, None, None, None,
-            Outcome::Success, None, now, 1, None, metadata,
+            1,
+            tenant_id,
+            "svc",
+            "evt",
+            None,
+            None,
+            None,
+            None,
+            Outcome::Success,
+            None,
+            now,
+            1,
+            None,
+            metadata,
         );
         let msg2 = canonical_msg(
-            1, tenant_id, "svc", "evt", None, None, None, None,
-            Outcome::Success, None, now, 2, None, metadata,
+            1,
+            tenant_id,
+            "svc",
+            "evt",
+            None,
+            None,
+            None,
+            None,
+            Outcome::Success,
+            None,
+            now,
+            2,
+            None,
+            metadata,
         );
 
         // Epoch 2 appends metadata; epoch 1 does not — they must differ.
@@ -302,6 +330,9 @@ mod tests {
         // Epoch 2 message must contain the metadata string.
         assert!(msg2.contains(metadata), "epoch-2 msg must include metadata");
         // Epoch 1 message must NOT contain the metadata string.
-        assert!(!msg1.contains(metadata), "epoch-1 msg must not include metadata");
+        assert!(
+            !msg1.contains(metadata),
+            "epoch-1 msg must not include metadata"
+        );
     }
 }

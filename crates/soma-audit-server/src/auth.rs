@@ -25,7 +25,10 @@ pub enum IngestIdentity {
     /// Authenticated with the shared master ingest secret.
     Master,
     /// Authenticated with a per-source key bound to a specific service/tenant.
-    Source { source_service: String, tenant_id: Uuid },
+    Source {
+        source_service: String,
+        tenant_id: Uuid,
+    },
 }
 
 /// Authenticate an ingest request.
@@ -65,9 +68,10 @@ pub async fn authenticate_ingest(
     })?;
 
     match row {
-        Some((source_service, tenant_id)) => {
-            Ok(IngestIdentity::Source { source_service, tenant_id })
-        }
+        Some((source_service, tenant_id)) => Ok(IngestIdentity::Source {
+            source_service,
+            tenant_id,
+        }),
         None => Err(ApiError::Unauthorized),
     }
 }

@@ -37,8 +37,8 @@ pub async fn mint_key(
     let bytes = axum::body::to_bytes(body, 64 * 1024)
         .await
         .map_err(|_| ApiError::BadRequest("failed to read body".into()))?;
-    let payload: MintKeyRequest = serde_json::from_slice(&bytes)
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let payload: MintKeyRequest =
+        serde_json::from_slice(&bytes).map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     // Generate 32 random bytes, hex-encode as the plaintext key.
     let mut raw = [0u8; 32];
@@ -151,7 +151,9 @@ mod tests {
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         let status = resp.status();
-        let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
         let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
         (status, json)
     }
@@ -200,9 +202,16 @@ mod tests {
         let (status, json) = mint_key_via_api(&app, "svc-mint-test", tenant_id).await;
         assert_eq!(status, StatusCode::OK);
         let key = json["key"].as_str().expect("key field missing");
-        assert_eq!(key.len(), 64, "key should be 32 bytes hex-encoded (64 chars)");
+        assert_eq!(
+            key.len(),
+            64,
+            "key should be 32 bytes hex-encoded (64 chars)"
+        );
         assert_eq!(json["source_service"].as_str(), Some("svc-mint-test"));
-        assert_eq!(json["tenant_id"].as_str(), Some(tenant_id.to_string().as_str()));
+        assert_eq!(
+            json["tenant_id"].as_str(),
+            Some(tenant_id.to_string().as_str())
+        );
     }
 
     #[tokio::test]
@@ -285,17 +294,14 @@ mod tests {
         let key = json["key"].as_str().unwrap().to_string();
 
         // Same service but wrong tenant.
-        let ingest_status =
-            post_event_with_key(&app, &key, "svc-tenant-bound", other_tenant).await;
+        let ingest_status = post_event_with_key(&app, &key, "svc-tenant-bound", other_tenant).await;
         assert_eq!(ingest_status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
     async fn test_ingest_with_master_secret_still_works() {
         let Some(url) = test_db_url() else {
-            eprintln!(
-                "SKIP test_ingest_with_master_secret_still_works: TEST_DATABASE_URL not set"
-            );
+            eprintln!("SKIP test_ingest_with_master_secret_still_works: TEST_DATABASE_URL not set");
             return;
         };
         let pool = sqlx::postgres::PgPoolOptions::new()
@@ -309,17 +315,14 @@ mod tests {
         let app = crate::routes::router(state, &[]);
 
         let tenant_id = Uuid::new_v4();
-        let status =
-            post_event_with_key(&app, "test-ingest-secret", "any-svc", tenant_id).await;
+        let status = post_event_with_key(&app, "test-ingest-secret", "any-svc", tenant_id).await;
         assert_eq!(status, StatusCode::CREATED);
     }
 
     #[tokio::test]
     async fn test_ingest_with_bogus_key_is_unauthorized() {
         let Some(url) = test_db_url() else {
-            eprintln!(
-                "SKIP test_ingest_with_bogus_key_is_unauthorized: TEST_DATABASE_URL not set"
-            );
+            eprintln!("SKIP test_ingest_with_bogus_key_is_unauthorized: TEST_DATABASE_URL not set");
             return;
         };
         let pool = sqlx::postgres::PgPoolOptions::new()

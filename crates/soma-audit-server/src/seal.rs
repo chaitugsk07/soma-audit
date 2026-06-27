@@ -15,8 +15,7 @@ use crate::{auth::check_admin_auth, error::ApiError, state::AppState};
 const SEAL_INTERVAL_SECS: u64 = 60;
 
 pub async fn run_seal_sweep(state: Arc<AppState>, pool: PgPool) {
-    let mut interval =
-        tokio::time::interval(std::time::Duration::from_secs(SEAL_INTERVAL_SECS));
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(SEAL_INTERVAL_SECS));
     loop {
         interval.tick().await;
         if let Err(e) = sweep_once(&state, &pool).await {

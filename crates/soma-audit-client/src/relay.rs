@@ -285,7 +285,12 @@ pub(crate) async fn record_failure(
 ) {
     // Bug 2 fix: exponential backoff via next_retry_at. SQL computes the
     // interval so there is no clock-skew between app and DB.
-    warn!(id = row.id, attempts = row.attempts + 1, error, "outbox relay failed");
+    warn!(
+        id = row.id,
+        attempts = row.attempts + 1,
+        error,
+        "outbox relay failed"
+    );
     if let Err(e) = sqlx::query(
         "UPDATE soma_audit_outbox.events \
          SET attempts = attempts + 1, \

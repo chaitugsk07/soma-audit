@@ -35,10 +35,9 @@ async fn main() -> anyhow::Result<()> {
     init_telemetry();
 
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL required")?;
-    let bind_addr =
-        std::env::var("SOMA_AUDIT_BIND").unwrap_or_else(|_| "0.0.0.0:8080".into());
-    let ingest_secret = std::env::var("SOMA_AUDIT_INGEST_SECRET")
-        .context("SOMA_AUDIT_INGEST_SECRET required")?;
+    let bind_addr = std::env::var("SOMA_AUDIT_BIND").unwrap_or_else(|_| "0.0.0.0:8080".into());
+    let ingest_secret =
+        std::env::var("SOMA_AUDIT_INGEST_SECRET").context("SOMA_AUDIT_INGEST_SECRET required")?;
     let admin_token =
         std::env::var("SOMA_AUDIT_ADMIN_TOKEN").context("SOMA_AUDIT_ADMIN_TOKEN required")?;
 
@@ -61,7 +60,9 @@ async fn main() -> anyhow::Result<()> {
 
     // install() runs all soma-audit-pg migrations: the audit events table (v1)
     // and the chain-seals table (v2). Idempotent, advisory-locked.
-    soma_audit_pg::install(&pool).await.context("schema install failed")?;
+    soma_audit_pg::install(&pool)
+        .await
+        .context("schema install failed")?;
 
     let sink = Arc::new(soma_audit_pg::LocalSink::new(
         pool.clone(),
@@ -101,7 +102,9 @@ async fn shutdown_signal() {
     use tokio::signal;
 
     let ctrl_c = async {
-        signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
     };
 
     #[cfg(unix)]

@@ -17,9 +17,9 @@ use crate::keys::{tenant_lock_key, AuditKeys};
 pub struct ListFilter<'a> {
     pub event_type: Option<&'a str>,
     pub source_service: Option<&'a str>,
-    pub from: Option<DateTime<Utc>>,  // occurred_at >= from
-    pub to: Option<DateTime<Utc>>,    // occurred_at <= to
-    pub cursor: Option<i64>,          // keyset: seq_num < cursor (DESC)
+    pub from: Option<DateTime<Utc>>, // occurred_at >= from
+    pub to: Option<DateTime<Utc>>,   // occurred_at <= to
+    pub cursor: Option<i64>,         // keyset: seq_num < cursor (DESC)
 }
 
 pub struct LocalSink {
@@ -155,10 +155,7 @@ impl LocalSink {
         // canonical hash.  The ingest HTTP boundary validates this for remote
         // callers; this check guards the embedded (direct record_in_tx) path.
         let has_rs = |s: &str| s.contains('\u{1e}');
-        for field in [
-            stamped.source_service.as_str(),
-            stamped.event_type.as_str(),
-        ] {
+        for field in [stamped.source_service.as_str(), stamped.event_type.as_str()] {
             if has_rs(field) {
                 return Err(AuditPgError::InvalidField(
                     "field contains forbidden control character (RS 0x1E)".into(),
@@ -387,7 +384,11 @@ impl LocalSink {
             .ok_or_else(|| AuditPgError::Env("no fixed_tenant set on this LocalSink".into()))?;
         self.list(
             tenant_id,
-            ListFilter { event_type, cursor, ..Default::default() },
+            ListFilter {
+                event_type,
+                cursor,
+                ..Default::default()
+            },
             limit,
         )
         .await
@@ -461,7 +462,11 @@ impl LocalSink {
         tx.commit().await?;
 
         let has_more = rows.len() as i64 > limit;
-        let rows_slice = if has_more { &rows[..limit as usize] } else { &rows[..] };
+        let rows_slice = if has_more {
+            &rows[..limit as usize]
+        } else {
+            &rows[..]
+        };
         let next_cursor = if has_more {
             rows_slice.last().map(|r| r.occurred_at.timestamp_micros())
         } else {

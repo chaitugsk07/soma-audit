@@ -80,14 +80,10 @@ pub async fn list_global(
         to: params.to,
         cursor: params.cursor,
     };
-    let (items, next_cursor) = state
-        .sink
-        .list_global(filter, limit)
-        .await
-        .map_err(|e| {
-            tracing::error!("failed to list global events: {e}");
-            ApiError::Internal
-        })?;
+    let (items, next_cursor) = state.sink.list_global(filter, limit).await.map_err(|e| {
+        tracing::error!("failed to list global events: {e}");
+        ApiError::Internal
+    })?;
 
     Ok(Json(ListResponse { items, next_cursor }))
 }

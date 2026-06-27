@@ -93,8 +93,8 @@ pub async fn register_source(
     let bytes = axum::body::to_bytes(body, 64 * 1024)
         .await
         .map_err(|_| ApiError::BadRequest("failed to read body".into()))?;
-    let payload: RegisterRequest = serde_json::from_slice(&bytes)
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let payload: RegisterRequest =
+        serde_json::from_slice(&bytes).map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     sqlx::query(
         "INSERT INTO soma_audit.sources (source_service, tenant_id, host_url, version) \
@@ -132,8 +132,8 @@ pub async fn heartbeat(
     let bytes = axum::body::to_bytes(body, 64 * 1024)
         .await
         .map_err(|_| ApiError::BadRequest("failed to read body".into()))?;
-    let payload: HeartbeatRequest = serde_json::from_slice(&bytes)
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let payload: HeartbeatRequest =
+        serde_json::from_slice(&bytes).map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     sqlx::query(
         "INSERT INTO soma_audit.sources (source_service, tenant_id) \
@@ -246,7 +246,9 @@ mod tests {
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let sources = json["sources"].as_array().unwrap();
 
@@ -310,7 +312,9 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
-        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let sources = json["sources"].as_array().unwrap();
         let found = sources.iter().find(|s| {

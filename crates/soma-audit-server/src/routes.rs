@@ -69,6 +69,9 @@ async fn health_ready(
 ) -> impl axum::response::IntoResponse {
     match sqlx::query("SELECT 1").execute(state.sink.pool()).await {
         Ok(_) => (axum::http::StatusCode::OK, "ok"),
-        Err(_) => (axum::http::StatusCode::SERVICE_UNAVAILABLE, "db unavailable"),
+        Err(_) => (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "db unavailable",
+        ),
     }
 }

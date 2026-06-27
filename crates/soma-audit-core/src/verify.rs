@@ -39,9 +39,13 @@ pub struct ChainCursor {
 ///
 /// This is the shared kernel used by both [`verify_chain`] (slice path) and
 /// the streaming pg verify (O(1) memory path).
-pub fn verify_record(record: &AuditRecord, prev: Option<&ChainCursor>, key: &[u8]) -> Result<(), i64> {
-    let metadata_json = serde_json::to_string(&record.event.metadata)
-        .unwrap_or_else(|_| "{}".to_owned());
+pub fn verify_record(
+    record: &AuditRecord,
+    prev: Option<&ChainCursor>,
+    key: &[u8],
+) -> Result<(), i64> {
+    let metadata_json =
+        serde_json::to_string(&record.event.metadata).unwrap_or_else(|_| "{}".to_owned());
     let canonical = canonical_msg(
         record.seq_num,
         record.event.tenant_id,

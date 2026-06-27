@@ -67,13 +67,17 @@ pub async fn post_event(
         .await
         .map_err(|_| ApiError::BadRequest("failed to read body".into()))?;
 
-    let payload: IngestRequest = serde_json::from_slice(&bytes)
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let payload: IngestRequest =
+        serde_json::from_slice(&bytes).map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     // Per-source key: enforce source binding — the key may only post events
     // for its registered (source_service, tenant_id). Any mismatch is an
     // impersonation attempt and must be rejected with 403.
-    if let IngestIdentity::Source { source_service, tenant_id } = &identity {
+    if let IngestIdentity::Source {
+        source_service,
+        tenant_id,
+    } = &identity
+    {
         if payload.source_service != *source_service || payload.tenant_id != *tenant_id {
             return Err(ApiError::Forbidden);
         }

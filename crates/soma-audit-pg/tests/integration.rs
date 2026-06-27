@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use uuid::Uuid;
 
-use soma_audit_pg::{AuditEvent, AuditKeys, ListFilter, LocalSink, Outcome, install};
+use soma_audit_pg::{install, AuditEvent, AuditKeys, ListFilter, LocalSink, Outcome};
 
 fn test_db_url() -> Option<String> {
     std::env::var("TEST_DATABASE_URL").ok()
@@ -43,7 +43,9 @@ async fn test_install_idempotent() {
         .await
         .expect("connect");
     install(&pool).await.expect("first install");
-    install(&pool).await.expect("second install should be idempotent");
+    install(&pool)
+        .await
+        .expect("second install should be idempotent");
 }
 
 #[tokio::test]
@@ -90,7 +92,9 @@ async fn test_record_in_tx_atomic() {
 
     {
         let mut tx = pool.begin().await.expect("begin");
-        sink.record_in_tx(&event, &mut tx).await.expect("record_in_tx");
+        sink.record_in_tx(&event, &mut tx)
+            .await
+            .expect("record_in_tx");
         // Implicit ROLLBACK (tx dropped without commit)
     }
 
@@ -101,13 +105,12 @@ async fn test_record_in_tx_atomic() {
         .execute(&mut *tx)
         .await
         .expect("set guc");
-    let count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM soma_audit.fct_audit_events WHERE tenant_id = $1",
-    )
-    .bind(tenant)
-    .fetch_one(&mut *tx)
-    .await
-    .expect("count");
+    let count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM soma_audit.fct_audit_events WHERE tenant_id = $1")
+            .bind(tenant)
+            .fetch_one(&mut *tx)
+            .await
+            .expect("count");
     tx.commit().await.ok();
     assert_eq!(count.0, 0, "rollback should have removed the row");
 }
@@ -130,7 +133,10 @@ async fn test_idempotent_record() {
     let event = make_event(tenant);
 
     let r1 = sink.record(&event).await.expect("first record");
-    let r2 = sink.record(&event).await.expect("second record (idempotent)");
+    let r2 = sink
+        .record(&event)
+        .await
+        .expect("second record (idempotent)");
     assert_eq!(r1.id, r2.id, "idempotent call should return same record");
 }
 
@@ -157,14 +163,16 @@ async fn test_append_only_trigger() {
         .execute(&mut *tx)
         .await
         .ok();
-    let update_result = sqlx::query(
-        "UPDATE soma_audit.fct_audit_events SET event_type = 'tampered' WHERE id = $1",
-    )
-    .bind(rec.id)
-    .execute(&mut *tx)
-    .await;
+    let update_result =
+        sqlx::query("UPDATE soma_audit.fct_audit_events SET event_type = 'tampered' WHERE id = $1")
+            .bind(rec.id)
+            .execute(&mut *tx)
+            .await;
     tx.rollback().await.ok();
-    assert!(update_result.is_err(), "UPDATE should be blocked by trigger");
+    assert!(
+        update_result.is_err(),
+        "UPDATE should be blocked by trigger"
+    );
 }
 
 /// Item 4: single-tenant sink fills nil tenant_id from fixed_tenant.
@@ -189,7 +197,10 @@ async fn test_single_tenant_nil_fill() {
     event.idempotency_key = Uuid::new_v4(); // ensure unique
 
     let rec = sink.record(&event).await.expect("record");
-    assert_eq!(rec.event.tenant_id, tenant, "nil tenant_id should be replaced by fixed_tenant");
+    assert_eq!(
+        rec.event.tenant_id, tenant,
+        "nil tenant_id should be replaced by fixed_tenant"
+    );
 
     // verify_default should work without an explicit tenant_id arg.
     let result = sink.verify_default().await.expect("verify_default");
@@ -222,10 +233,16 @@ async fn test_cross_tenant_idempotency_key_both_insert() {
     ev_b.idempotency_key = shared_key;
 
     let r_a = sink.record(&ev_a).await.expect("record tenant_a");
-    let r_b = sink.record(&ev_b).await.expect("record tenant_b should also succeed");
+    let r_b = sink
+        .record(&ev_b)
+        .await
+        .expect("record tenant_b should also succeed");
 
     // Both records should have been inserted (different tenants → not a conflict).
-    assert_ne!(r_a.id, r_b.id, "cross-tenant same key must produce two distinct records");
+    assert_ne!(
+        r_a.id, r_b.id,
+        "cross-tenant same key must produce two distinct records"
+    );
 }
 
 /// Item 5: same idempotency_key same tenant deduplicates.
@@ -247,7 +264,10 @@ async fn test_same_tenant_idempotency_key_dedupes() {
     let event = make_event(tenant);
 
     let r1 = sink.record(&event).await.expect("first record");
-    let r2 = sink.record(&event).await.expect("second record (idempotent)");
+    let r2 = sink
+        .record(&event)
+        .await
+        .expect("second record (idempotent)");
     assert_eq!(r1.id, r2.id, "same tenant+key must return the same record");
 }
 
@@ -369,7 +389,10 @@ async fn test_list_filter_source_service() {
     let (records, _) = sink
         .list(
             tenant,
-            ListFilter { source_service: Some("svc-alpha"), ..Default::default() },
+            ListFilter {
+                source_service: Some("svc-alpha"),
+                ..Default::default()
+            },
             50,
         )
         .await
@@ -377,7 +400,10 @@ async fn test_list_filter_source_service() {
 
     assert!(!records.is_empty(), "should have at least one result");
     for r in &records {
-        assert_eq!(r.event.source_service, "svc-alpha", "all results must match filter");
+        assert_eq!(
+            r.event.source_service, "svc-alpha",
+            "all results must match filter"
+        );
     }
 }
 
@@ -419,13 +445,20 @@ async fn test_list_filter_date_range() {
     let (records, _) = sink
         .list(
             tenant,
-            ListFilter { from: Some(from), to: Some(to), ..Default::default() },
+            ListFilter {
+                from: Some(from),
+                to: Some(to),
+                ..Default::default()
+            },
             50,
         )
         .await
         .expect("list");
 
-    assert!(!records.is_empty(), "should have at least one result in range");
+    assert!(
+        !records.is_empty(),
+        "should have at least one result in range"
+    );
     for r in &records {
         assert!(
             r.event.occurred_at >= from && r.event.occurred_at <= to,
@@ -467,7 +500,10 @@ async fn test_list_global_cross_tenant() {
 
     let (records, _) = sink
         .list_global(
-            ListFilter { source_service: Some(&svc_name), ..Default::default() },
+            ListFilter {
+                source_service: Some(&svc_name),
+                ..Default::default()
+            },
             50,
         )
         .await

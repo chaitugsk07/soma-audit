@@ -99,28 +99,34 @@ mod db {
         // First enqueue — should insert one row.
         sink.enqueue(&event).await.expect("first enqueue");
 
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM soma_audit_outbox.events WHERE event_id = $1",
-        )
-        .bind(event.idempotency_key)
-        .fetch_one(&pool)
-        .await
-        .expect("count after first enqueue");
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM soma_audit_outbox.events WHERE event_id = $1")
+                .bind(event.idempotency_key)
+                .fetch_one(&pool)
+                .await
+                .expect("count after first enqueue");
 
-        assert_eq!(count, 1, "expected exactly one outbox row after first enqueue");
+        assert_eq!(
+            count, 1,
+            "expected exactly one outbox row after first enqueue"
+        );
 
         // Second enqueue with the same idempotency_key — must not insert a duplicate.
-        sink.enqueue(&event).await.expect("second enqueue (idempotent)");
+        sink.enqueue(&event)
+            .await
+            .expect("second enqueue (idempotent)");
 
-        let count2: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM soma_audit_outbox.events WHERE event_id = $1",
-        )
-        .bind(event.idempotency_key)
-        .fetch_one(&pool)
-        .await
-        .expect("count after second enqueue");
+        let count2: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM soma_audit_outbox.events WHERE event_id = $1")
+                .bind(event.idempotency_key)
+                .fetch_one(&pool)
+                .await
+                .expect("count after second enqueue");
 
-        assert_eq!(count2, 1, "expected still exactly one outbox row after duplicate enqueue");
+        assert_eq!(
+            count2, 1,
+            "expected still exactly one outbox row after duplicate enqueue"
+        );
 
         // The row must be undelivered.
         let delivered: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
@@ -163,13 +169,12 @@ mod db {
         sink.enqueue(&event).await.expect("enqueue");
 
         // Fetch the row id so we can target it.
-        let row_id: i64 = sqlx::query_scalar(
-            "SELECT id FROM soma_audit_outbox.events WHERE event_id = $1",
-        )
-        .bind(event.idempotency_key)
-        .fetch_one(&pool)
-        .await
-        .expect("fetch row id");
+        let row_id: i64 =
+            sqlx::query_scalar("SELECT id FROM soma_audit_outbox.events WHERE event_id = $1")
+                .bind(event.idempotency_key)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch row id");
 
         // Apply the same UPDATE the relay uses in record_failure (attempts=0 → 1).
         sqlx::query(
@@ -259,7 +264,10 @@ mod db {
         .await
         .expect("count");
 
-        assert_eq!(count, 0, "dead-lettered row must be excluded from relay poll");
+        assert_eq!(
+            count, 0,
+            "dead-lettered row must be excluded from relay poll"
+        );
 
         // Cleanup.
         sqlx::query("DELETE FROM soma_audit_outbox.events WHERE event_id = $1")
