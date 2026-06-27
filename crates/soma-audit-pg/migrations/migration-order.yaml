@@ -1,0 +1,44 @@
+manifest_version: 1
+versions:
+  - version: 1
+    description: "Initial audit events table"
+    migrations:
+      - file: "20260626_01_audit-events.sql"
+        created: "2026-06-26"
+        author: "soma-audit"
+        why: "Create append-only HMAC-chained audit events table"
+  - version: 2
+    description: "Chain-seal checkpoints"
+    migrations:
+      - file: "20260626_02_audit-chain-seals.sql"
+        created: "2026-06-26"
+        author: "soma-audit"
+        why: "Move audit_chain_seals from inline server DDL into a tracked migration"
+  - version: 3
+    description: "Scope idempotency_key uniqueness to (tenant_id, idempotency_key)"
+    migrations:
+      - file: "20260626_03_idempotency-scope.sql"
+        created: "2026-06-26"
+        author: "soma-audit"
+        why: "Replace global UNIQUE(idempotency_key) with tenant-scoped UNIQUE(tenant_id, idempotency_key)"
+  - version: 4
+    description: "Unique constraint on (tenant_id, up_to_seq_num) for chain seals"
+    migrations:
+      - file: "20260626_04_seal-unique.sql"
+        created: "2026-06-26"
+        author: "soma-audit"
+        why: "Prevent duplicate seals for same (tenant, chain-head) from concurrent seal sweeps"
+  - version: 5
+    description: "Source service discovery table"
+    migrations:
+      - file: "20260626_05_sources.sql"
+        created: "2026-06-26"
+        author: "soma-audit"
+        why: "Track source services and tenants for the admin discovery dashboard"
+  - version: 6
+    description: "Per-source ingest keys"
+    migrations:
+      - file: "20260626_06_source-keys.sql"
+        created: "2026-06-26"
+        author: "soma-audit"
+        why: "Per-source ingest keys: one revocable key per (source_service, tenant_id) for source-scoped auth"

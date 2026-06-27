@@ -1,0 +1,34 @@
+[package]
+name = "soma-audit-pg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Postgres-backed local audit sink and schema installer for soma-audit: HMAC-chained, RLS-isolated event storage with automated migrations."
+keywords = ["audit", "postgres", "logging", "security", "tamper-evident"]
+categories = ["database", "cryptography"]
+readme = "README.md"
+
+[dependencies]
+soma-audit-core = { path = "../soma-audit-core", version = "0.1.0" }
+soma-schema = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+hkdf = { workspace = true }
+sha2 = { workspace = true }
+hmac = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+zeroize = { workspace = true }
+thiserror = { workspace = true }
+include_dir = { workspace = true }
+futures = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

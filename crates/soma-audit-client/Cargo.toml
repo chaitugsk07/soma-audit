@@ -1,0 +1,29 @@
+[package]
+name = "soma-audit-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Remote sink for soma-audit: durable local outbox + background relay to a central soma-audit-server."
+keywords = ["audit", "logging", "postgres", "outbox", "tamper-evident"]
+categories = ["database", "asynchronous"]
+readme = "README.md"
+
+[dependencies]
+soma-audit-core = { path = "../soma-audit-core", version = "0.1.0" }
+soma-schema = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+include_dir = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

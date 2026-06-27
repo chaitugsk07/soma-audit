@@ -1,0 +1,46 @@
+[package]
+name = "soma-audit-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Central audit ingestion and query server: receives events from remote services, stores them in a hash-chained Postgres log, and exposes query, verify, seal, and key endpoints plus an embedded dashboard portal."
+keywords = ["audit", "logging", "postgres", "security", "tamper-evident"]
+categories = ["database", "web-programming"]
+readme = "README.md"
+
+[[bin]]
+name = "soma-audit-server"
+path = "src/main.rs"
+
+[dependencies]
+soma-audit-core = { path = "../soma-audit-core", version = "0.1.0" }
+soma-audit-pg = { path = "../soma-audit-pg", version = "0.1.0" }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tokio = { workspace = true }
+rust-embed = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+zeroize = { workspace = true }
+sha2 = { workspace = true }
+subtle = { workspace = true }
+base64 = "0.22"
+
+[features]
+embed-dashboard = ["dep:rust-embed"]
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }

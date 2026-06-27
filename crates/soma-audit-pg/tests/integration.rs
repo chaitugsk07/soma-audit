@@ -1,0 +1,523 @@
+//! Integration tests — require a live Postgres.
+//! Set TEST_DATABASE_URL to run; tests are skipped if the env var is absent.
+
+use std::sync::Arc;
+use uuid::Uuid;
+
+use soma_audit_pg::{install, AuditEvent, AuditKeys, ListFilter, LocalSink, Outcome};
+
+fn test_db_url() -> Option<String> {
+    std::env::var("TEST_DATABASE_URL").ok()
+}
+
+fn make_keys() -> Arc<AuditKeys> {
+    Arc::new(AuditKeys::from_secret([0xab; 32], [0xcd; 32]))
+}
+
+fn make_event(tenant_id: Uuid) -> AuditEvent {
+    AuditEvent {
+        source_service: "test".into(),
+        idempotency_key: Uuid::new_v4(),
+        tenant_id,
+        event_type: "test.event".into(),
+        actor_id: None,
+        actor_role: None,
+        resource_type: None,
+        resource_id: None,
+        outcome: Outcome::Success,
+        actor_ip: None,
+        occurred_at: chrono::Utc::now(),
+        metadata: serde_json::Value::Null,
+    }
+}
+
+#[tokio::test]
+async fn test_install_idempotent() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_install_idempotent: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("first install");
+    install(&pool)
+        .await
+        .expect("second install should be idempotent");
+}
+
+#[tokio::test]
+async fn test_record_and_verify() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_record_and_verify: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let sink = LocalSink::new(pool, make_keys(), "test-service");
+    let tenant = Uuid::new_v4();
+
+    for _ in 0..3 {
+        sink.record(&make_event(tenant)).await.expect("record");
+    }
+
+    let result = sink.verify(tenant).await.expect("verify");
+    assert!(result.ok, "chain should be valid");
+    assert_eq!(result.entries_checked, 3);
+}
+
+#[tokio::test]
+async fn test_record_in_tx_atomic() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_record_in_tx_atomic: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let sink = LocalSink::new(pool.clone(), make_keys(), "test-service");
+    let tenant = Uuid::new_v4();
+    let event = make_event(tenant);
+
+    {
+        let mut tx = pool.begin().await.expect("begin");
+        sink.record_in_tx(&event, &mut tx)
+            .await
+            .expect("record_in_tx");
+        // Implicit ROLLBACK (tx dropped without commit)
+    }
+
+    // No rows should exist for this tenant
+    let mut tx = pool.begin().await.expect("begin");
+    sqlx::query("SELECT set_config('soma_audit.tenant_id', $1::text, true)")
+        .bind(tenant.to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("set guc");
+    let count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM soma_audit.fct_audit_events WHERE tenant_id = $1")
+            .bind(tenant)
+            .fetch_one(&mut *tx)
+            .await
+            .expect("count");
+    tx.commit().await.ok();
+    assert_eq!(count.0, 0, "rollback should have removed the row");
+}
+
+#[tokio::test]
+async fn test_idempotent_record() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_idempotent_record: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let sink = LocalSink::new(pool, make_keys(), "test-service");
+    let tenant = Uuid::new_v4();
+    let event = make_event(tenant);
+
+    let r1 = sink.record(&event).await.expect("first record");
+    let r2 = sink
+        .record(&event)
+        .await
+        .expect("second record (idempotent)");
+    assert_eq!(r1.id, r2.id, "idempotent call should return same record");
+}
+
+#[tokio::test]
+async fn test_append_only_trigger() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_append_only_trigger: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let sink = LocalSink::new(pool.clone(), make_keys(), "test-service");
+    let tenant = Uuid::new_v4();
+    let rec = sink.record(&make_event(tenant)).await.expect("record");
+
+    let mut tx = pool.begin().await.expect("begin");
+    sqlx::query("SELECT set_config('soma_audit.tenant_id', $1::text, true)")
+        .bind(tenant.to_string())
+        .execute(&mut *tx)
+        .await
+        .ok();
+    let update_result =
+        sqlx::query("UPDATE soma_audit.fct_audit_events SET event_type = 'tampered' WHERE id = $1")
+            .bind(rec.id)
+            .execute(&mut *tx)
+            .await;
+    tx.rollback().await.ok();
+    assert!(
+        update_result.is_err(),
+        "UPDATE should be blocked by trigger"
+    );
+}
+
+/// Item 4: single-tenant sink fills nil tenant_id from fixed_tenant.
+#[tokio::test]
+async fn test_single_tenant_nil_fill() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_single_tenant_nil_fill: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let tenant = Uuid::new_v4();
+    let sink = LocalSink::new_single_tenant(pool, make_keys(), "test-service", tenant);
+
+    // Build an event with nil tenant_id — the sink should fill it in.
+    let mut event = make_event(Uuid::nil());
+    event.idempotency_key = Uuid::new_v4(); // ensure unique
+
+    let rec = sink.record(&event).await.expect("record");
+    assert_eq!(
+        rec.event.tenant_id, tenant,
+        "nil tenant_id should be replaced by fixed_tenant"
+    );
+
+    // verify_default should work without an explicit tenant_id arg.
+    let result = sink.verify_default().await.expect("verify_default");
+    assert!(result.ok);
+    assert!(result.entries_checked >= 1);
+}
+
+/// Item 5: same idempotency_key under two different tenants both insert.
+#[tokio::test]
+async fn test_cross_tenant_idempotency_key_both_insert() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_cross_tenant_idempotency_key_both_insert: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let sink = LocalSink::new(pool, make_keys(), "test-service");
+    let tenant_a = Uuid::new_v4();
+    let tenant_b = Uuid::new_v4();
+    let shared_key = Uuid::new_v4();
+
+    let mut ev_a = make_event(tenant_a);
+    ev_a.idempotency_key = shared_key;
+    let mut ev_b = make_event(tenant_b);
+    ev_b.idempotency_key = shared_key;
+
+    let r_a = sink.record(&ev_a).await.expect("record tenant_a");
+    let r_b = sink
+        .record(&ev_b)
+        .await
+        .expect("record tenant_b should also succeed");
+
+    // Both records should have been inserted (different tenants → not a conflict).
+    assert_ne!(
+        r_a.id, r_b.id,
+        "cross-tenant same key must produce two distinct records"
+    );
+}
+
+/// Item 5: same idempotency_key same tenant deduplicates.
+#[tokio::test]
+async fn test_same_tenant_idempotency_key_dedupes() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_same_tenant_idempotency_key_dedupes: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let sink = LocalSink::new(pool, make_keys(), "test-service");
+    let tenant = Uuid::new_v4();
+    let event = make_event(tenant);
+
+    let r1 = sink.record(&event).await.expect("first record");
+    let r2 = sink
+        .record(&event)
+        .await
+        .expect("second record (idempotent)");
+    assert_eq!(r1.id, r2.id, "same tenant+key must return the same record");
+}
+
+/// BUG 1 + BUG 2 regression test.
+///
+/// Records events for two tenants, then runs the seal-sweep SELECT (with
+/// `SET LOCAL soma_audit.bypass = 'on'`) and asserts:
+///   - Both tenants are returned (bypass GUC enables cross-tenant read).
+///   - The `chain_head_hash` returned equals the `entry_hash` of the row
+///     with the highest `seq_num` for each tenant (not the lexicographic
+///     MAX of all entry_hashes).
+#[tokio::test]
+async fn test_seal_sweep_tip_hash_and_rls_bypass() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_seal_sweep_tip_hash_and_rls_bypass: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let sink = LocalSink::new(pool.clone(), make_keys(), "test-service");
+    let tenant_a = Uuid::new_v4();
+    let tenant_b = Uuid::new_v4();
+
+    // Insert multiple events per tenant so seq_num > 1; the chain tip
+    // is the last inserted record for each tenant.
+    let mut tip_a = None;
+    for _ in 0..3 {
+        tip_a = Some(sink.record(&make_event(tenant_a)).await.expect("record a"));
+    }
+    let mut tip_b = None;
+    for _ in 0..2 {
+        tip_b = Some(sink.record(&make_event(tenant_b)).await.expect("record b"));
+    }
+    let tip_a = tip_a.unwrap();
+    let tip_b = tip_b.unwrap();
+
+    // Run the core sweep SELECT with the bypass GUC — omit the NOT EXISTS
+    // clause that references audit_chain_seals (created only by the server
+    // crate) to keep this test self-contained in soma-audit-pg.
+    // This still proves: (a) bypass GUC lets us read all tenants, and (b)
+    // DISTINCT ON returns the correct chain tip row per tenant.
+    let mut tx = pool.begin().await.expect("begin tx");
+    sqlx::query("SET LOCAL soma_audit.bypass = 'on'")
+        .execute(&mut *tx)
+        .await
+        .expect("set bypass guc");
+
+    let rows: Vec<(Uuid, i64, String)> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT ON (e.tenant_id)
+            e.tenant_id, e.seq_num AS up_to_seq, e.entry_hash AS chain_head_hash
+        FROM soma_audit.fct_audit_events e
+        WHERE e.tenant_id = ANY($1)
+        ORDER BY e.tenant_id, e.seq_num DESC
+        "#,
+    )
+    // Scope to our two test tenants to avoid interference from parallel tests.
+    .bind(vec![tenant_a, tenant_b])
+    .fetch_all(&mut *tx)
+    .await
+    .expect("sweep select");
+    tx.commit().await.expect("commit");
+
+    // Both tenants must be visible (BUG 2: bypass GUC works).
+    let find = |id: Uuid| rows.iter().find(|(tid, _, _)| *tid == id).cloned();
+    let row_a = find(tenant_a).expect("tenant_a not found — RLS bypass failed");
+    let row_b = find(tenant_b).expect("tenant_b not found — RLS bypass failed");
+
+    // BUG 1: the returned chain_head_hash must be the entry_hash of the tip row.
+    assert_eq!(
+        row_a.2, tip_a.entry_hash,
+        "tenant_a chain_head_hash must equal tip entry_hash"
+    );
+    assert_eq!(
+        row_a.1, tip_a.seq_num,
+        "tenant_a up_to_seq must equal tip seq_num"
+    );
+    assert_eq!(
+        row_b.2, tip_b.entry_hash,
+        "tenant_b chain_head_hash must equal tip entry_hash"
+    );
+    assert_eq!(
+        row_b.1, tip_b.seq_num,
+        "tenant_b up_to_seq must equal tip seq_num"
+    );
+}
+
+/// ListFilter: source_service filter returns only matching events.
+#[tokio::test]
+async fn test_list_filter_source_service() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_list_filter_source_service: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let sink = LocalSink::new(pool, make_keys(), "test-service");
+    let tenant = Uuid::new_v4();
+
+    // Insert two events with different source_service values.
+    let mut ev_alpha = make_event(tenant);
+    ev_alpha.source_service = "svc-alpha".into();
+    let mut ev_beta = make_event(tenant);
+    ev_beta.source_service = "svc-beta".into();
+
+    sink.record(&ev_alpha).await.expect("record alpha");
+    sink.record(&ev_beta).await.expect("record beta");
+
+    let (records, _) = sink
+        .list(
+            tenant,
+            ListFilter {
+                source_service: Some("svc-alpha"),
+                ..Default::default()
+            },
+            50,
+        )
+        .await
+        .expect("list");
+
+    assert!(!records.is_empty(), "should have at least one result");
+    for r in &records {
+        assert_eq!(
+            r.event.source_service, "svc-alpha",
+            "all results must match filter"
+        );
+    }
+}
+
+/// ListFilter: date range (from/to) filters events by occurred_at.
+#[tokio::test]
+async fn test_list_filter_date_range() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_list_filter_date_range: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let sink = LocalSink::new(pool, make_keys(), "test-service");
+    let tenant = Uuid::new_v4();
+
+    let now = chrono::Utc::now();
+    let past = now - chrono::Duration::hours(2);
+    let future = now + chrono::Duration::hours(2);
+
+    // Event in the past
+    let mut ev_past = make_event(tenant);
+    ev_past.occurred_at = past;
+    sink.record(&ev_past).await.expect("record past");
+
+    // Event in the future
+    let mut ev_future = make_event(tenant);
+    ev_future.occurred_at = future;
+    sink.record(&ev_future).await.expect("record future");
+
+    // Query for events in [past - 1h, past + 1h] — should only get the past event.
+    let from = past - chrono::Duration::hours(1);
+    let to = past + chrono::Duration::hours(1);
+
+    let (records, _) = sink
+        .list(
+            tenant,
+            ListFilter {
+                from: Some(from),
+                to: Some(to),
+                ..Default::default()
+            },
+            50,
+        )
+        .await
+        .expect("list");
+
+    assert!(
+        !records.is_empty(),
+        "should have at least one result in range"
+    );
+    for r in &records {
+        assert!(
+            r.event.occurred_at >= from && r.event.occurred_at <= to,
+            "occurred_at must be within [from, to]"
+        );
+    }
+}
+
+/// list_global: returns events from multiple tenants.
+#[tokio::test]
+async fn test_list_global_cross_tenant() {
+    let Some(url) = test_db_url() else {
+        eprintln!("SKIP test_list_global_cross_tenant: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let sink = LocalSink::new(pool, make_keys(), "test-service");
+    let tenant_a = Uuid::new_v4();
+    let tenant_b = Uuid::new_v4();
+
+    // Give each event a distinct source_service so we can narrow the global query
+    // to just these two tenants without polluting from parallel tests.
+    let tag = Uuid::new_v4().to_string();
+    let svc_name = format!("global-test-{}", &tag[..8]);
+
+    let mut ev_a = make_event(tenant_a);
+    ev_a.source_service = svc_name.clone();
+    let mut ev_b = make_event(tenant_b);
+    ev_b.source_service = svc_name.clone();
+
+    sink.record(&ev_a).await.expect("record tenant_a");
+    sink.record(&ev_b).await.expect("record tenant_b");
+
+    let (records, _) = sink
+        .list_global(
+            ListFilter {
+                source_service: Some(&svc_name),
+                ..Default::default()
+            },
+            50,
+        )
+        .await
+        .expect("list_global");
+
+    let tenant_ids: std::collections::HashSet<uuid::Uuid> =
+        records.iter().map(|r| r.event.tenant_id).collect();
+
+    assert!(
+        tenant_ids.contains(&tenant_a),
+        "global list must include tenant_a"
+    );
+    assert!(
+        tenant_ids.contains(&tenant_b),
+        "global list must include tenant_b"
+    );
+}

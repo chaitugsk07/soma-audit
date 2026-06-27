@@ -1,0 +1,58 @@
+# Local dev / single-node production stack: postgres + soma-audit-server.
+#
+# Usage:
+#   1. Copy deploy/.env.example to deploy/.env and fill in the secrets.
+#      Generate required secrets (run each command once and paste the output):
+#        openssl rand -hex 32   # for SOMA_AUDIT_MASTER_SECRET
+#        openssl rand -hex 32   # for SOMA_AUDIT_SIGNING_KEY
+#        openssl rand -hex 32   # for SOMA_AUDIT_INGEST_SECRET
+#        openssl rand -hex 32   # for SOMA_AUDIT_ADMIN_TOKEN
+#   2. docker compose --env-file deploy/.env -f deploy/docker-compose.yml up -d
+#
+# Set TEST_DATABASE_URL=postgres://soma:soma@localhost:5432/soma_audit
+# for local integration tests run outside Docker.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: soma
+      POSTGRES_PASSWORD: soma
+      POSTGRES_DB: soma_audit
+    ports:
+      - "5432:5432"
+    volumes:
+      - soma_audit_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U soma -d soma_audit"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  soma-audit-server:
+    image: ghcr.io/chaitugsk07/soma-audit:latest
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://soma:soma@postgres:5432/soma_audit
+      SOMA_AUDIT_MASTER_SECRET: "${SOMA_AUDIT_MASTER_SECRET:?set SOMA_AUDIT_MASTER_SECRET in deploy/.env (generate: openssl rand -hex 32)}"
+      SOMA_AUDIT_SIGNING_KEY: "${SOMA_AUDIT_SIGNING_KEY:?set SOMA_AUDIT_SIGNING_KEY in deploy/.env (generate: openssl rand -hex 32)}"
+      SOMA_AUDIT_INGEST_SECRET: "${SOMA_AUDIT_INGEST_SECRET:?set SOMA_AUDIT_INGEST_SECRET in deploy/.env (generate: openssl rand -hex 32)}"
+      SOMA_AUDIT_ADMIN_TOKEN: "${SOMA_AUDIT_ADMIN_TOKEN:?set SOMA_AUDIT_ADMIN_TOKEN in deploy/.env (generate: openssl rand -hex 32)}"
+      SOMA_AUDIT_BIND: "${SOMA_AUDIT_BIND:-0.0.0.0:8080}"
+      RUST_LOG: "${RUST_LOG:-info,sqlx=warn}"
+      LOG_FORMAT: "${LOG_FORMAT:-}"
+      # Uncomment to restrict CORS origins (optional; requires SOMA_AUDIT_CORS_ORIGINS support in the binary):
+      # SOMA_AUDIT_CORS_ORIGINS: "${SOMA_AUDIT_CORS_ORIGINS:-}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  soma_audit_pg:

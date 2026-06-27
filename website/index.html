@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>soma-audit — Tamper-evident audit logging for Rust services</title>
+  <meta name="description" content="Drop in a LocalSink, get a per-tenant HMAC hash chain that can't be quietly edited or deleted. Tamper-evident audit logging for Rust/Postgres services." />
+  <meta property="og:title" content="soma-audit — Tamper-evident audit logging for Rust services" />
+  <meta property="og:description" content="Drop in a LocalSink, get a per-tenant HMAC hash chain that can't be quietly edited or deleted." />
+  <meta property="og:type" content="website" />
+
+  <!-- Favicon: chain-link shield SVG -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0c10'/%3E%3Cpath d='M10 8h12l2 4H8l2-4z' fill='%233ddc84' opacity='.9'/%3E%3Crect x='8' y='12' width='16' height='12' rx='2' fill='none' stroke='%233ddc84' stroke-width='1.5'/%3E%3Ccircle cx='16' cy='18' r='2.5' fill='%233ddc84'/%3E%3Cline x1='16' y1='20.5' x2='16' y2='23' stroke='%233ddc84' stroke-width='1.5'/%3E%3C/svg%3E" />
+
+  <!-- Google Fonts: JetBrains Mono + Hanken Grotesk -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Hanken+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<!-- Subtle background grid -->
+<div class="grid-bg" aria-hidden="true"></div>
+
+<!-- ════════════════════════════════════════════
+     NAV
+════════════════════════════════════════════ -->
+<nav aria-label="Main navigation">
+  <div class="container">
+    <a class="nav-brand" href="#top" aria-label="soma-audit home">
+      <svg class="nav-logo" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect width="28" height="28" rx="5" fill="#0d1018"/>
+        <rect x="6" y="6" width="16" height="16" rx="2" fill="none" stroke="#3ddc84" stroke-width="1.25"/>
+        <path d="M10 14h8M14 10v8" stroke="#3ddc84" stroke-width="1.5" stroke-linecap="round"/>
+        <circle cx="10" cy="14" r="1.5" fill="#3ddc84"/>
+        <circle cx="18" cy="14" r="1.5" fill="#3ddc84"/>
+      </svg>
+      <span class="nav-brand-name">soma-audit<span class="dot">.</span></span>
+    </a>
+    <ul class="nav-links" role="list">
+      <li><a href="#chain-demo">Chain Demo</a></li>
+      <li><a href="#features">Features</a></li>
+      <li><a href="#crates">Crates</a></li>
+      <li><a href="#demo">Run Demo</a></li>
+      <li><a href="https://github.com/chaitugsk07/soma-audit" target="_blank" rel="noopener noreferrer" class="nav-cta">GitHub ↗</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- ════════════════════════════════════════════
+     HERO
+════════════════════════════════════════════ -->
+<main id="top">
+<section class="hero" aria-labelledby="hero-heading">
+  <div class="hero-glow" aria-hidden="true"></div>
+  <div class="container">
+    <div class="hero-content">
+      <div class="hero-badge" aria-label="Status: Early · Apache-2.0">
+        <span class="hero-badge-dot" aria-hidden="true"></span>
+        Early · Apache-2.0
+      </div>
+
+      <h1 class="hero-title" id="hero-heading">
+        Tamper-evident<br/>
+        <span class="accent-word">audit logging</span><br/>
+        for Rust services.
+      </h1>
+
+      <p class="hero-sub">
+        Drop in a <code>LocalSink</code>, get a per-tenant HMAC hash chain
+        that can't be quietly edited or deleted. Every event commits
+        <em>atomic</em> with your business write—or not at all.
+      </p>
+
+      <div class="hero-actions">
+        <a href="#chain-demo" class="btn-primary">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.4"/>
+            <path d="M5 7l2 2 2-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          See how it works
+        </a>
+        <a href="https://github.com/chaitugsk07/soma-audit" class="btn-secondary" target="_blank" rel="noopener noreferrer">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M7 1C3.69 1 1 3.748 1 7.135c0 2.714 1.72 5.015 4.104 5.826.3.057.41-.133.41-.296v-1.034c-1.67.373-2.02-.826-2.02-.826-.274-.714-.67-.904-.67-.904-.546-.383.042-.375.042-.375.604.043.922.636.922.636.536.943 1.407.67 1.75.513.055-.4.21-.67.38-.824-1.333-.155-2.734-.684-2.734-3.043 0-.672.234-1.22.617-1.651-.062-.154-.267-.78.059-1.627 0 0 .503-.164 1.648.63A5.61 5.61 0 0 1 7 4.77c.51.002 1.024.07 1.503.207 1.145-.794 1.647-.63 1.647-.63.326.847.12 1.473.06 1.627.384.43.616.98.616 1.651 0 2.366-1.403 2.887-2.74 3.04.216.19.407.565.407 1.14v1.69c0 .164.11.356.414.296C11.28 12.15 13 9.849 13 7.135 13 3.748 10.314 1 7 1z" fill="currentColor"/>
+          </svg>
+          View on GitHub
+        </a>
+      </div>
+
+      <!-- Hero code block -->
+      <div class="code-block-wrap" role="region" aria-label="Rust integration example">
+        <div class="code-header">
+          <div class="code-dots" aria-hidden="true">
+            <div class="code-dot red"></div>
+            <div class="code-dot yellow"></div>
+            <div class="code-dot green"></div>
+          </div>
+          <span class="code-lang">Rust — 3-step integration</span>
+        </div>
+        <div class="code-block" aria-label="Code example">
+          <div class="line"><span class="ln">1</span><span class="lc"><span class="kw">use</span> <span class="nm">soma_audit_pg</span><span class="pn">::{</span><span class="fn_">install</span><span class="pn">,</span> <span class="ty">AuditKeys</span><span class="pn">,</span> <span class="ty">LocalSink</span><span class="pn">,</span> <span class="ty">AuditEvent</span><span class="pn">,</span> <span class="ty">Outcome</span><span class="pn">};</span></span></div>
+          <div class="line"><span class="ln">2</span><span class="lc">&nbsp;</span></div>
+          <div class="line"><span class="ln">3</span><span class="lc"><span class="cm">// 1. One line creates the audit schema + tables (idempotent).</span></span></div>
+          <div class="line"><span class="ln">4</span><span class="lc"><span class="fn_">install</span><span class="pn">(&amp;</span><span class="nm">pool</span><span class="pn">).</span><span class="kw">await</span><span class="pn">?;</span></span></div>
+          <div class="line"><span class="ln">5</span><span class="lc">&nbsp;</span></div>
+          <div class="line"><span class="ln">6</span><span class="lc"><span class="cm">// 2. Load keys + build the sink.</span></span></div>
+          <div class="line"><span class="ln">7</span><span class="lc"><span class="kw">let</span> <span class="nm">sink</span> <span class="pn">=</span> <span class="ty">LocalSink</span><span class="pn">::</span><span class="fn_">new</span><span class="pn">(</span></span></div>
+          <div class="line"><span class="ln">8</span><span class="lc">    <span class="nm">pool</span><span class="pn">.</span><span class="fn_">clone</span><span class="pn">(),</span></span></div>
+          <div class="line"><span class="ln">9</span><span class="lc">    <span class="ty">Arc</span><span class="pn">::</span><span class="fn_">new</span><span class="pn">(</span><span class="ty">AuditKeys</span><span class="pn">::</span><span class="fn_">from_env_local</span><span class="pn">()?),</span></span></div>
+          <div class="line"><span class="ln">10</span><span class="lc">    <span class="st">"my-service"</span></span></div>
+          <div class="line"><span class="ln">11</span><span class="lc"><span class="pn">);</span></span></div>
+          <div class="line"><span class="ln">12</span><span class="lc">&nbsp;</span></div>
+          <div class="line"><span class="ln">13</span><span class="lc"><span class="cm">// 3. Record an event ATOMIC with your business write.</span></span></div>
+          <div class="line"><span class="ln">14</span><span class="lc"><span class="kw">let mut</span> <span class="nm">tx</span> <span class="pn">=</span> <span class="nm">pool</span><span class="pn">.</span><span class="fn_">begin</span><span class="pn">().</span><span class="kw">await</span><span class="pn">?;</span></span></div>
+          <div class="line"><span class="ln">15</span><span class="lc"><span class="cm">// ... your business write ...</span></span></div>
+          <div class="line"><span class="ln">16</span><span class="lc"><span class="nm">sink</span><span class="pn">.</span><span class="fn_">record_in_tx</span><span class="pn">(&amp;</span><span class="nm">event</span><span class="pn">, &amp;</span><span class="kw">mut</span> <span class="nm">tx</span><span class="pn">).</span><span class="kw">await</span><span class="pn">?;</span></span></div>
+          <div class="line"><span class="ln">17</span><span class="lc"><span class="nm">tx</span><span class="pn">.</span><span class="fn_">commit</span><span class="pn">().</span><span class="kw">await</span><span class="pn">?;</span> <span class="cm">// note + audit row commit together, or not at all</span></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════
+     HASH CHAIN DEMO
+════════════════════════════════════════════ -->
+<section class="chain-section" id="chain-demo" aria-labelledby="chain-heading">
+  <div class="container">
+    <div class="chain-intro">
+      <div class="chain-intro-text">
+        <div class="section-label" aria-hidden="true">verify_chain</div>
+        <h2 class="section-title" id="chain-heading">
+          Tamper one block.<br/>Watch the chain break.
+        </h2>
+        <p class="section-desc">
+          Each audit record's HMAC covers the previous hash.
+          Click any block to simulate tampering — the break cascades
+          downstream exactly as <code class="mono" style="font-size:13px;color:var(--accent);background:var(--accent-dim);padding:2px 7px;border-radius:3px;">verify_chain</code> detects it.
+        </p>
+      </div>
+      <div class="chain-controls">
+        <button class="btn-reset" id="chain-reset" aria-label="Reset and re-verify chain">
+          ↺ Re-verify
+        </button>
+      </div>
+    </div>
+
+    <!-- Status bar -->
+    <div class="chain-status-bar verified" id="chain-status" role="status" aria-live="polite">
+      <span class="status-icon" aria-hidden="true">✓</span>
+      <span class="status-msg" id="chain-status-msg">All 6 records verified · HMAC chain intact</span>
+    </div>
+
+    <!-- The chain -->
+    <div class="chain-wrapper">
+      <div class="chain-row" id="chain-row" role="list" aria-label="Audit hash chain — click a block to tamper">
+        <!-- Blocks are injected by JS -->
+      </div>
+    </div>
+
+    <!-- Break callout -->
+    <div class="chain-break-callout" id="chain-callout" role="alert" aria-live="assertive">
+      <span class="callout-icon" aria-hidden="true">⚠</span>
+      <span id="callout-text">chain broken at #0</span>
+      <button class="btn-reset" id="chain-reset-2" aria-label="Reset chain to verified state" style="margin-left:auto">↺ Re-verify</button>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════
+     TWO MODES
+════════════════════════════════════════════ -->
+<section class="modes-section" id="modes" aria-labelledby="modes-heading">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label" aria-hidden="true">Architecture</div>
+      <h2 class="section-title" id="modes-heading">Two modes. One chain.</h2>
+      <p class="section-desc">
+        Pick the deployment that fits your trust boundary.
+        Both produce the same per-tenant HMAC-SHA256 chain.
+      </p>
+    </div>
+
+    <div class="modes-grid reveal stagger-2">
+      <div class="mode-card">
+        <div class="mode-tag">Embedded</div>
+        <h3>soma-audit-pg</h3>
+        <p>
+          <code>LocalSink</code> writes audit events directly into the host service's
+          own Postgres. The audit row commits in the <strong>same transaction</strong>
+          as the business write—no separate round trip, no gap between your
+          data and the audit record. Crash between the two is architecturally impossible.
+        </p>
+      </div>
+      <div class="mode-card">
+        <div class="mode-tag">Central</div>
+        <h3>soma-audit-client + server</h3>
+        <p>
+          A durable local outbox in the host's Postgres relays events to a central
+          <code>soma-audit-server</code> that aggregates them across services and
+          exposes an admin portal with chain verification, event filters, seals,
+          and key management.
+        </p>
+      </div>
+    </div>
+
+    <div class="modes-chain-note reveal stagger-3">
+      <strong>The chain is the same in both modes.</strong> HMAC-SHA256 per tenant,
+      keys derived via HKDF-SHA256 from a 32-byte master secret so one tenant's
+      compromise doesn't touch others. Ed25519 periodic seals checkpoint the
+      chain head for external verifiability.
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════
+     FEATURES
+════════════════════════════════════════════ -->
+<section class="features-section" id="features" aria-labelledby="features-heading">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label" aria-hidden="true">Guarantees</div>
+      <h2 class="section-title" id="features-heading">What you actually get.</h2>
+      <p class="section-desc">
+        No hand-wavy promises. These are structural guarantees
+        that come from how the system is built.
+      </p>
+    </div>
+
+    <div class="features-grid reveal stagger-2" role="list">
+
+      <div class="feature-cell" role="listitem">
+        <div class="feature-icon" aria-hidden="true">⚡</div>
+        <h4>Atomic with your write</h4>
+        <p><code>record_in_tx</code> commits the audit row inside your business transaction.
+        Crash between the two is impossible — they succeed or fail together.</p>
+      </div>
+
+      <div class="feature-cell" role="listitem">
+        <div class="feature-icon" aria-hidden="true">🔗</div>
+        <h4>Tamper-evident hash chain</h4>
+        <p>HMAC-SHA256 chain per tenant. Any edit, deletion, or reordering breaks the
+        chain and is caught by <code>verify_chain</code>. No silent corruption.</p>
+      </div>
+
+      <div class="feature-cell" role="listitem">
+        <div class="feature-icon" aria-hidden="true">🔒</div>
+        <h4>Append-only at the database</h4>
+        <p>Postgres triggers block <code>UPDATE</code> and <code>DELETE</code> on
+        <code>soma_audit.fct_audit_events</code>. Even a compromised app credential
+        can't alter the record.</p>
+      </div>
+
+      <div class="feature-cell" role="listitem">
+        <div class="feature-icon" aria-hidden="true">🗝</div>
+        <h4>Per-tenant key isolation</h4>
+        <p>Keys derived from one 32-byte master secret via HKDF-SHA256. One tenant's
+        compromise doesn't touch others. Keys never leave the server process.</p>
+      </div>
+
+      <div class="feature-cell" role="listitem">
+        <div class="feature-icon" aria-hidden="true">✍</div>
+        <h4>Ed25519 seals</h4>
+        <p>Periodic signatures checkpoint the chain head for external verifiability.
+        An auditor can verify the chain without database access.</p>
+      </div>
+
+      <div class="feature-cell" role="listitem">
+        <div class="feature-icon" aria-hidden="true">🐘</div>
+        <h4>Plain Postgres 16</h4>
+        <p>No external queue, no separate process for embedded mode. Standard sqlx
+        connection pool, no exotic Postgres features that reduce portability.</p>
+      </div>
+
+      <div class="feature-cell" role="listitem">
+        <div class="feature-icon" aria-hidden="true">📦</div>
+        <h4>Drops into any Rust app</h4>
+        <p>axum / sqlx / tokio stack. <code>install()</code> sets up the tables via
+        soma-schema so you don't hand-write audit SQL or manage migrations yourself.</p>
+      </div>
+
+      <div class="feature-cell" role="listitem">
+        <div class="feature-icon" aria-hidden="true">🖥</div>
+        <h4>Admin portal</h4>
+        <p>Central server ships an embedded dashboard: events, filters, chain verify,
+        seals, keys. Self-hosted, no external services.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════
+     INSTALL / SCHEMA CALLOUT
+════════════════════════════════════════════ -->
+<section class="install-section" id="install" aria-labelledby="install-heading">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label" aria-hidden="true">Zero-boilerplate setup</div>
+    </div>
+    <div class="install-box reveal stagger-2">
+      <h3 id="install-heading">How it sets up your database.</h3>
+      <p>
+        <code>install(&amp;pool)</code> runs soma-audit's bundled migrations through
+        <strong>soma-schema</strong> (the migration runner) and creates the
+        <code>soma_audit</code> schema, the <code>fct_audit_events</code> table,
+        append-only triggers, and row-level-security—coexisting with your app's own
+        tables via a dedicated advisory lock key. You never write audit SQL by hand.
+      </p>
+
+      <div class="code-block-wrap">
+        <div class="code-header">
+          <div class="code-dots" aria-hidden="true">
+            <div class="code-dot red"></div>
+            <div class="code-dot yellow"></div>
+            <div class="code-dot green"></div>
+          </div>
+          <span class="code-lang">What install() creates</span>
+        </div>
+        <div class="code-block" style="padding:20px 24px;">
+          <div class="line"><span class="ln">—</span><span class="lc"><span class="cm">-- schema</span></span></div>
+          <div class="line"><span class="ln">—</span><span class="lc"><span class="kw">CREATE SCHEMA IF NOT EXISTS</span> <span class="fn_">soma_audit</span><span class="pn">;</span></span></div>
+          <div class="line"><span class="ln">—</span><span class="lc">&nbsp;</span></div>
+          <div class="line"><span class="ln">—</span><span class="lc"><span class="cm">-- immutable event log</span></span></div>
+          <div class="line"><span class="ln">—</span><span class="lc"><span class="kw">CREATE TABLE</span> <span class="fn_">soma_audit.fct_audit_events</span> <span class="pn">(</span></span></div>
+          <div class="line"><span class="ln">—</span><span class="lc">  <span class="nm">seq</span>           <span class="ty">BIGINT</span> <span class="kw">GENERATED ALWAYS AS IDENTITY</span> <span class="kw">PRIMARY KEY</span><span class="pn">,</span></span></div>
+          <div class="line"><span class="ln">—</span><span class="lc">  <span class="nm">tenant_id</span>     <span class="ty">TEXT</span> <span class="kw">NOT NULL</span><span class="pn">,</span></span></div>
+          <div class="line"><span class="ln">—</span><span class="lc">  <span class="nm">entry_hash</span>    <span class="ty">TEXT</span> <span class="kw">NOT NULL</span><span class="pn">,</span>  <span class="cm">-- HMAC-SHA256</span></span></div>
+          <div class="line"><span class="ln">—</span><span class="lc">  <span class="nm">prev_hash</span>     <span class="ty">TEXT</span> <span class="kw">NOT NULL</span><span class="pn">,</span>  <span class="cm">-- back-links the chain</span></span></div>
+          <div class="line"><span class="ln">—</span><span class="lc">  <span class="nm">payload</span>       <span class="ty">JSONB</span> <span class="kw">NOT NULL</span></span></div>
+          <div class="line"><span class="ln">—</span><span class="lc"><span class="pn">);</span></span></div>
+          <div class="line"><span class="ln">—</span><span class="lc">&nbsp;</span></div>
+          <div class="line"><span class="ln">—</span><span class="lc"><span class="cm">-- append-only enforcement</span></span></div>
+          <div class="line"><span class="ln">—</span><span class="lc"><span class="kw">CREATE TRIGGER</span> <span class="fn_">no_mutation</span> <span class="kw">BEFORE UPDATE OR DELETE ON</span></span></div>
+          <div class="line"><span class="ln">—</span><span class="lc">  <span class="fn_">soma_audit.fct_audit_events</span> <span class="kw">FOR EACH ROW</span></span></div>
+          <div class="line"><span class="ln">—</span><span class="lc">  <span class="kw">EXECUTE</span> <span class="fn_">FUNCTION</span> <span class="fn_">soma_audit.prevent_mutation</span><span class="pn">();</span></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════
+     CRATES
+════════════════════════════════════════════ -->
+<section class="crates-section" id="crates" aria-labelledby="crates-heading">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label" aria-hidden="true">The crates</div>
+      <h2 class="section-title" id="crates-heading">Four crates, one audit chain.</h2>
+      <p class="section-desc">
+        Take only what you need. Most apps add <strong>soma-audit-pg</strong>
+        and call it done.
+      </p>
+    </div>
+
+    <div class="crates-grid reveal stagger-2">
+      <div class="crate-card">
+        <div class="crate-marker" aria-hidden="true"></div>
+        <div class="crate-content">
+          <div class="crate-name">soma-audit-core</div>
+          <div class="crate-desc">Pure zero-IO chain + crypto. The HMAC-SHA256 chain logic and HKDF key derivation. No database dependency.</div>
+        </div>
+      </div>
+
+      <div class="crate-card">
+        <div class="crate-marker" aria-hidden="true"></div>
+        <div class="crate-content">
+          <div class="crate-name">soma-audit-pg</div>
+          <div class="crate-desc">The embeddable <code style="font-family:var(--font-mono);font-size:12px;color:var(--accent);background:var(--accent-dim);padding:1px 5px;border-radius:3px">LocalSink</code> + schema installer. This is the one you add to your app. Handles <code style="font-family:var(--font-mono);font-size:12px;color:var(--accent);background:var(--accent-dim);padding:1px 5px;border-radius:3px">install()</code> and <code style="font-family:var(--font-mono);font-size:12px;color:var(--accent);background:var(--accent-dim);padding:1px 5px;border-radius:3px">record_in_tx</code>.</div>
+        </div>
+      </div>
+
+      <div class="crate-card">
+        <div class="crate-marker" aria-hidden="true"></div>
+        <div class="crate-content">
+          <div class="crate-name">soma-audit-client</div>
+          <div class="crate-desc">Remote sink: durable outbox in the host's Postgres + relay to the central server. For multi-service aggregation.</div>
+        </div>
+      </div>
+
+      <div class="crate-card">
+        <div class="crate-marker" aria-hidden="true"></div>
+        <div class="crate-content">
+          <div class="crate-name">soma-audit-server</div>
+          <div class="crate-desc">Central service: ingest, query, verify, seals, and keys API + embedded admin portal. Self-hosted, Postgres-backed.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════
+     RUN THE DEMO
+════════════════════════════════════════════ -->
+<section class="demo-section" id="demo" aria-labelledby="demo-heading">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label" aria-hidden="true">examples/notes-app</div>
+      <h2 class="section-title" id="demo-heading">Run the demo in 3 commands.</h2>
+      <p class="section-desc">
+        A runnable notes-app shows the full round-trip: create a note, read back a
+        verified audit trail. No Docker orchestration needed—just a Postgres 16 instance.
+      </p>
+    </div>
+
+    <div class="demo-steps reveal stagger-2">
+
+      <div class="demo-step">
+        <div class="step-num" aria-label="Step 1">1</div>
+        <div class="step-body">
+          <strong class="mono" style="color:var(--text-pri);font-size:14px;">Start the app</strong>
+          <div class="inline-code-block" aria-label="Start command">
+<span class="prompt">$</span> cd examples/notes-app
+<span class="prompt">$</span> DATABASE_URL<span class="pn">=</span><span class="val">postgres://localhost/mydb</span> cargo run</div>
+          <p>Connects to Postgres, runs <code style="font-family:var(--font-mono);font-size:12px;color:var(--accent);background:var(--accent-dim);padding:2px 6px;border-radius:3px">install()</code>, and starts the axum server on port 3000.</p>
+        </div>
+      </div>
+
+      <div class="demo-step">
+        <div class="step-num" aria-label="Step 2">2</div>
+        <div class="step-body">
+          <strong class="mono" style="color:var(--text-pri);font-size:14px;">Create a note (audited automatically)</strong>
+          <div class="inline-code-block" aria-label="Create note command">
+<span class="prompt">$</span> curl <span class="flag">-X POST</span> localhost:3000/notes \
+     <span class="flag">-H</span> <span class="val">'Content-Type: application/json'</span> \
+     <span class="flag">-d</span> <span class="val">'{"title":"hello","body":"world"}'</span>
+<span class="out">{"id":"a3f9...","title":"hello","created_at":"2024-..."}</span></div>
+          <p>The note row and its audit event commit in the same transaction.</p>
+        </div>
+      </div>
+
+      <div class="demo-step">
+        <div class="step-num" aria-label="Step 3">3</div>
+        <div class="step-body">
+          <strong class="mono" style="color:var(--text-pri);font-size:14px;">Verify the chain</strong>
+          <div class="inline-code-block" aria-label="Verify chain command">
+<span class="prompt">$</span> curl localhost:3000/audit/verify
+<span class="ok">{"ok":true,"verified":1,"tenant":"notes-app"}</span></div>
+          <p>
+            <code style="font-family:var(--font-mono);font-size:12px;color:var(--accent);background:var(--accent-dim);padding:2px 6px;border-radius:3px">verify_chain</code> walks every record for this tenant, recomputes the HMAC,
+            and confirms the chain hasn't been tampered with.
+          </p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════
+     DOCS / LINKS
+════════════════════════════════════════════ -->
+<section class="links-section" id="docs" aria-labelledby="docs-heading">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label" aria-hidden="true">Docs &amp; source</div>
+      <h2 class="section-title" id="docs-heading" style="font-size:clamp(20px,2.8vw,30px)">Read the source.</h2>
+    </div>
+
+    <div class="links-grid reveal stagger-2">
+      <a href="https://github.com/chaitugsk07/soma-audit/blob/main/README.md" class="link-card" target="_blank" rel="noopener noreferrer">
+        <span class="link-card-icon" aria-hidden="true">📄</span>
+        README.md
+      </a>
+      <a href="https://github.com/chaitugsk07/soma-audit/blob/main/docs/INTEGRATION.md" class="link-card" target="_blank" rel="noopener noreferrer">
+        <span class="link-card-icon" aria-hidden="true">🔌</span>
+        docs/INTEGRATION.md
+      </a>
+      <a href="https://github.com/chaitugsk07/soma-audit/tree/main/examples/notes-app" class="link-card" target="_blank" rel="noopener noreferrer">
+        <span class="link-card-icon" aria-hidden="true">▶</span>
+        examples/notes-app
+      </a>
+      <a href="https://github.com/chaitugsk07/soma-audit/tree/main/crates" class="link-card" target="_blank" rel="noopener noreferrer">
+        <span class="link-card-icon" aria-hidden="true">📦</span>
+        Per-crate READMEs
+      </a>
+      <a href="https://github.com/chaitugsk07/soma-audit" class="link-card" target="_blank" rel="noopener noreferrer">
+        <span class="link-card-icon" aria-hidden="true">⚙</span>
+        GitHub repo
+      </a>
+      <a href="https://github.com/chaitugsk07/soma-audit/blob/main/CONTRIBUTING.md" class="link-card" target="_blank" rel="noopener noreferrer">
+        <span class="link-card-icon" aria-hidden="true">🤝</span>
+        CONTRIBUTING.md
+      </a>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- ════════════════════════════════════════════
+     FOOTER
+════════════════════════════════════════════ -->
+<footer>
+  <div class="container">
+    <div class="footer-brand">
+      <strong>soma-audit</strong> — Apache-2.0. Part of the soma platform.
+    </div>
+    <div class="footer-meta">
+      <span class="footer-status">
+        <span class="footer-status-dot" aria-hidden="true"></span>
+        Early. Crates build and pass integration tests against Postgres 16.
+      </span>
+      <span class="footer-license">
+        <a href="https://github.com/chaitugsk07/soma-audit" target="_blank" rel="noopener noreferrer"
+           style="color:inherit;text-decoration:none;">github.com/chaitugsk07/soma-audit</a>
+      </span>
+    </div>
+  </div>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>

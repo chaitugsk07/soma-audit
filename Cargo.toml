@@ -1,0 +1,67 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/soma-audit-core",
+    "crates/soma-audit-pg",
+    "crates/soma-audit-client",
+    "crates/soma-audit-server",
+]
+exclude = ["dashboard"]
+
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/chaitugsk07/soma-audit"
+authors = ["Chaitu Gaddek <dev@kreesalis.com>"]
+# Floor is 1.88, enforced by the locked dependency tree (home 0.5.12 needs
+# rustc 1.88; icu_* 2.2.0 via idna/url need 1.86).
+rust-version = "1.88"
+
+[workspace.dependencies]
+# Serialisation
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Identifiers / time
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Crypto
+hkdf = "0.12"
+sha2 = "0.10"
+hmac = "0.12"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+zeroize = { version = "1", features = ["derive"] }
+subtle = "2"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "macros", "json", "ipnet"] }
+# Local path for dev; version pin is for crates.io publish. NOTE: requires
+# soma-schema >= 0.4 (the version that adds Migrator::from_embedded) to be
+# published before soma-audit-pg / -client can be published. crates.io 0.3.0
+# does NOT have from_embedded.
+soma-schema = { path = "../soma-schema", version = "0.4", default-features = false }
+include_dir = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+futures = "0.3"
+
+# HTTP server + client
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+rust-embed = "8"
+
+# Crypto extras
+rand = "0.8"
+
+# Error handling + observability
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
