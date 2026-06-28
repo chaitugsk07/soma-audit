@@ -22,15 +22,9 @@
 //! can coexist in the same tenant without confusing the verifier.
 
 use chrono::{DateTime, SubsecRound, Utc};
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
 use uuid::Uuid;
 
 use crate::event::{AuditEvent, AuditRecord, Outcome};
-
-fn to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
 
 const RS: char = '\x1e';
 
@@ -92,9 +86,7 @@ pub fn canonical_msg(
 
 /// HMAC-SHA256(`key`, `canonical`) → lowercase hex string.
 pub fn compute_entry_hash(canonical: &str, key: &[u8]) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
-    mac.update(canonical.as_bytes());
-    to_hex(&mac.finalize().into_bytes())
+    soma_infra::crypto::hmac_sha256_hex(key, canonical.as_bytes())
 }
 
 /// Build a fully-formed [`AuditRecord`] from an [`AuditEvent`] and the

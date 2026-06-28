@@ -6,7 +6,6 @@ use axum::{
 };
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{auth::check_admin_auth, error::ApiError, state::AppState};
@@ -46,8 +45,7 @@ pub async fn mint_key(
     let plaintext: String = raw.iter().map(|b| format!("{b:02x}")).collect();
 
     // Hash with SHA-256 — only the hash is stored.
-    let hash_bytes = Sha256::digest(plaintext.as_bytes());
-    let key_hash: String = hash_bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let key_hash = soma_infra::crypto::sha256_hex(plaintext.as_bytes());
 
     sqlx::query(
         "INSERT INTO soma_audit.source_keys (source_service, tenant_id, key_hash) \

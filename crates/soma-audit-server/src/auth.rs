@@ -1,5 +1,4 @@
 use axum::extract::Request;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{error::ApiError, state::AppState};
@@ -10,14 +9,6 @@ use crate::{error::ApiError, state::AppState};
 fn ct_eq(a: &str, b: &str) -> bool {
     use subtle::ConstantTimeEq;
     a.len() == b.len() && a.as_bytes().ct_eq(b.as_bytes()).into()
-}
-
-/// Extract bearer token from Authorization header.
-pub fn extract_bearer(req: &Request) -> Option<&str> {
-    req.headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
 }
 
 /// Identity established after ingest authentication.
@@ -51,8 +42,7 @@ pub async fn authenticate_ingest(
     }
 
     // Slow path: per-source key — hash and look up in DB.
-    let hash_bytes = Sha256::digest(token.as_bytes());
-    let hash: String = hash_bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let hash = soma_infra::crypto::sha256_hex(token.as_bytes());
 
     let row: Option<(String, Uuid)> = sqlx::query_as(
         "SELECT source_service, tenant_id \
@@ -78,7 +68,12 @@ pub async fn authenticate_ingest(
 
 /// Check ingest bearer token (master secret only — backwards compat).
 pub fn check_ingest_auth(state: &AppState, req: &Request) -> Result<(), ApiError> {
-    match extract_bearer(req) {
+    let tok = soma_infra::web::extract_bearer(
+        req.headers()
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok()),
+    );
+    match tok {
         Some(tok) if ct_eq(tok, &state.ingest_secret) => Ok(()),
         _ => Err(ApiError::Unauthorized),
     }
@@ -86,7 +81,12 @@ pub fn check_ingest_auth(state: &AppState, req: &Request) -> Result<(), ApiError
 
 /// Check admin bearer token.
 pub fn check_admin_auth(state: &AppState, req: &Request) -> Result<(), ApiError> {
-    match extract_bearer(req) {
+    let tok = soma_infra::web::extract_bearer(
+        req.headers()
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok()),
+    );
+    match tok {
         Some(tok) if ct_eq(tok, &state.admin_token) => Ok(()),
         _ => Err(ApiError::Unauthorized),
     }

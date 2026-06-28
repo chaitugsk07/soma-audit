@@ -8,7 +8,6 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{
     ingest::post_event,
-    portal::portal_handler,
     query::{get_keys, list_events, list_global, verify_chain},
     seal::list_seals,
     source_keys::{mint_key, revoke_key},
@@ -53,7 +52,16 @@ pub fn router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/v1/audit/seals", get(list_seals))
         .route("/v1/sources", get(list_sources))
         .route("/v1/sources/keys", post(mint_key).delete(revoke_key))
-        .fallback(portal_handler)
+        .fallback({
+            #[cfg(feature = "embed-dashboard")]
+            {
+                use axum::http::Uri;
+                use crate::portal::Assets;
+                |uri: Uri| async move { soma_infra::web::serve_spa::<Assets>(&uri) }
+            }
+            #[cfg(not(feature = "embed-dashboard"))]
+            crate::portal::portal_stub
+        })
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(TraceLayer::new_for_http())
         .layer(cors)

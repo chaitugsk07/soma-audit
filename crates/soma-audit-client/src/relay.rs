@@ -78,11 +78,7 @@ pub fn spawn_relay(pool: PgPool, cfg: RelayConfig) -> tokio::task::JoinHandle<()
 async fn relay_loop(pool: PgPool, cfg: RelayConfig) {
     // Bug 3 fix: build the client once with explicit timeouts so a hung central
     // server cannot stall the relay task indefinitely.
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .connect_timeout(Duration::from_secs(10))
-        .build()
-        .expect("failed to build reqwest client");
+    let client = soma_infra::http::client().expect("failed to build reqwest client");
 
     let base = cfg.central_url.trim_end_matches('/');
     let ingest_url = format!("{}/internal/v1/events", base);
