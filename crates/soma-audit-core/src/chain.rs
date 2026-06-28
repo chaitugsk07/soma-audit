@@ -21,7 +21,7 @@
 //! Changing this format requires bumping `chain_epoch` so old and new records
 //! can coexist in the same tenant without confusing the verifier.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound, Utc};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use uuid::Uuid;
@@ -117,6 +117,10 @@ pub fn seal_record(
     created_at: DateTime<Utc>,
     key: &[u8],
 ) -> AuditRecord {
+    // Postgres TIMESTAMPTZ has microsecond precision; truncate before hashing so
+    // the sealed hash and the value read back from the DB always agree.
+    let occurred_at_us = event.occurred_at.trunc_subsecs(6);
+
     let metadata_json = serde_json::to_string(&event.metadata).unwrap_or_else(|_| "{}".to_owned());
     let canonical = canonical_msg(
         seq_num,
@@ -129,12 +133,15 @@ pub fn seal_record(
         event.resource_id.as_deref(),
         event.outcome,
         event.actor_ip,
-        event.occurred_at,
+        occurred_at_us,
         chain_epoch,
         prev_hash,
         &metadata_json,
     );
     let entry_hash = compute_entry_hash(&canonical, key);
+
+    let mut sealed_event = event.clone();
+    sealed_event.occurred_at = occurred_at_us;
 
     AuditRecord {
         id,
@@ -143,7 +150,7 @@ pub fn seal_record(
         entry_hash,
         chain_epoch,
         created_at,
-        event: event.clone(),
+        event: sealed_event,
     }
 }
 

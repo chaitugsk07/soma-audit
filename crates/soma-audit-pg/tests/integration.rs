@@ -467,6 +467,59 @@ async fn test_list_filter_date_range() {
     }
 }
 
+/// Regression test: verify survives a DB round-trip when occurred_at has
+/// sub-microsecond nanoseconds. Before the fix, seal_record hashed the
+/// nanosecond-precision RFC3339 string but Postgres stored only microseconds,
+/// so the hash recomputed during verify used a different (truncated) string
+/// and the chain appeared broken.
+#[tokio::test]
+async fn test_verify_survives_subsecond_timestamp_precision() {
+    let Some(url) = test_db_url() else {
+        eprintln!(
+            "SKIP test_verify_survives_subsecond_timestamp_precision: TEST_DATABASE_URL not set"
+        );
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await
+        .expect("connect");
+    install(&pool).await.expect("install");
+
+    let sink = LocalSink::new(pool, make_keys(), "test-service");
+    let tenant = Uuid::new_v4();
+
+    // Construct an occurred_at with sub-microsecond nanoseconds (789 ns after
+    // the microsecond boundary). Postgres TIMESTAMPTZ will truncate to µs; the
+    // fix ensures the sealed hash was computed over the µs value, not the full
+    // ns value, so verify still passes.
+    let base = chrono::Utc::now();
+    let secs = base.timestamp();
+    // Use 123_456_789 ns — not µs-aligned (789 sub-µs nanos present).
+    let occurred_at_with_nanos =
+        chrono::DateTime::from_timestamp(secs, 123_456_789).expect("valid timestamp");
+
+    let mut event = make_event(tenant);
+    event.occurred_at = occurred_at_with_nanos;
+    // Ensure the nanoseconds are actually non-zero sub-µs.
+    assert_eq!(
+        occurred_at_with_nanos.timestamp_subsec_nanos() % 1_000,
+        789,
+        "test setup: sub-µs nanos must be present"
+    );
+
+    sink.record(&event).await.expect("record");
+
+    let result = sink.verify(tenant).await.expect("verify");
+    assert!(
+        result.ok,
+        "chain must verify after DB round-trip with sub-µs occurred_at; first_broken_seq={:?}",
+        result.first_broken_seq
+    );
+    assert_eq!(result.entries_checked, 1);
+}
+
 /// list_global: returns events from multiple tenants.
 #[tokio::test]
 async fn test_list_global_cross_tenant() {
