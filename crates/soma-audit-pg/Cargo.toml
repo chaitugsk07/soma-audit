@@ -12,7 +12,7 @@ categories = ["database", "cryptography"]
 readme = "README.md"
 
 [dependencies]
-soma-audit-core = { path = "../soma-audit-core", version = "0.1.0" }
+soma-audit-core = { path = "../soma-audit-core", version = "0.1.1" }
 soma-schema = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
