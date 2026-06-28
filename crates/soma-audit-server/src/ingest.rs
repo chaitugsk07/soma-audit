@@ -15,7 +15,7 @@ use soma_audit_core::Outcome;
 use soma_audit_pg::AuditEvent;
 
 use crate::{
-    auth::{authenticate_ingest, extract_bearer, IngestIdentity},
+    auth::{authenticate_ingest, IngestIdentity},
     error::ApiError,
     state::AppState,
 };
@@ -59,7 +59,12 @@ pub async fn post_event(
     // Extract bearer token before consuming the request body. AppState is
     // Clone (Arc-backed), so we pass an owned copy to authenticate_ingest,
     // keeping the future 'static as axum's Handler trait requires.
-    let token = extract_bearer(&req).map(str::to_owned);
+    let token = soma_infra::web::extract_bearer(
+        req.headers()
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok()),
+    )
+    .map(str::to_owned);
     let identity = authenticate_ingest(state.clone(), token).await?;
 
     let (_, body) = req.into_parts();

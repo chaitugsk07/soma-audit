@@ -11,14 +11,6 @@ fn ct_eq(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
-/// Extract bearer token from Authorization header.
-pub fn extract_bearer(req: &Request) -> Option<&str> {
-    req.headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-}
-
 /// Identity established after ingest authentication.
 pub enum IngestIdentity {
     /// Authenticated with the shared master ingest secret.
@@ -76,7 +68,12 @@ pub async fn authenticate_ingest(
 
 /// Check ingest bearer token (master secret only — backwards compat).
 pub fn check_ingest_auth(state: &AppState, req: &Request) -> Result<(), ApiError> {
-    match extract_bearer(req) {
+    let tok = soma_infra::web::extract_bearer(
+        req.headers()
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok()),
+    );
+    match tok {
         Some(tok) if ct_eq(tok, &state.ingest_secret) => Ok(()),
         _ => Err(ApiError::Unauthorized),
     }
@@ -84,7 +81,12 @@ pub fn check_ingest_auth(state: &AppState, req: &Request) -> Result<(), ApiError
 
 /// Check admin bearer token.
 pub fn check_admin_auth(state: &AppState, req: &Request) -> Result<(), ApiError> {
-    match extract_bearer(req) {
+    let tok = soma_infra::web::extract_bearer(
+        req.headers()
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok()),
+    );
+    match tok {
         Some(tok) if ct_eq(tok, &state.admin_token) => Ok(()),
         _ => Err(ApiError::Unauthorized),
     }
