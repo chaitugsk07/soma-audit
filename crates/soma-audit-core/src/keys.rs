@@ -4,8 +4,6 @@
 //! tenant's key is ever compromised, only that tenant's chain is affected;
 //! the master secret and all other tenants remain safe.
 
-use hkdf::Hkdf;
-use sha2::Sha256;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -14,15 +12,14 @@ use zeroize::Zeroizing;
 /// Algorithm: HKDF-SHA256(IKM=master_secret, salt=None,
 ///            info=b"soma-audit-hmac-v1" ++ tenant_id.as_bytes())
 pub fn derive_tenant_hmac_key(master_secret: &[u8; 32], tenant_id: Uuid) -> Zeroizing<[u8; 32]> {
-    let hkdf = Hkdf::<Sha256>::new(None, master_secret);
-
     let mut info = Vec::with_capacity(18 + 16);
     info.extend_from_slice(b"soma-audit-hmac-v1");
     info.extend_from_slice(tenant_id.as_bytes());
 
-    let mut out = Zeroizing::new([0u8; 32]);
-    hkdf.expand(&info, out.as_mut())
+    let vec = soma_infra::crypto::hkdf_sha256(master_secret, None, &info, 32)
         .expect("32 bytes is within HKDF output limit");
+    let mut out = Zeroizing::new([0u8; 32]);
+    out.copy_from_slice(&vec);
     out
 }
 

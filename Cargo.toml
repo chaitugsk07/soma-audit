@@ -8,8 +8,11 @@ members = [
 ]
 exclude = ["dashboard"]
 
+# Keep dev target/ lean: debug = false drops all debuginfo, strip removes symbols.
+# Prefer `cargo build --release` for real runs.
 [profile.dev]
-debug = "line-tables-only"
+debug = false
+strip = true
 incremental = false
 
 [workspace.package]

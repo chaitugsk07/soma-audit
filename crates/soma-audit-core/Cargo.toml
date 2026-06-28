@@ -12,13 +12,11 @@ categories = ["cryptography", "data-structures"]
 readme = "README.md"
 
 [dependencies]
+soma-infra = { path = "../../../soma-infra", features = ["crypto"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-hkdf = { workspace = true }
-sha2 = { workspace = true }
-hmac = { workspace = true }
 ed25519-dalek = { workspace = true }
 zeroize = { workspace = true }
 thiserror = { workspace = true }

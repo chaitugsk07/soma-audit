@@ -1,5 +1,4 @@
 use axum::extract::Request;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{error::ApiError, state::AppState};
@@ -51,8 +50,7 @@ pub async fn authenticate_ingest(
     }
 
     // Slow path: per-source key — hash and look up in DB.
-    let hash_bytes = Sha256::digest(token.as_bytes());
-    let hash: String = hash_bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let hash = soma_infra::crypto::sha256_hex(token.as_bytes());
 
     let row: Option<(String, Uuid)> = sqlx::query_as(
         "SELECT source_service, tenant_id \

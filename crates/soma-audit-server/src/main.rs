@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use sqlx::postgres::PgPoolOptions;
+use soma_infra::config::{env_or, require_env};
 use tokio::net::TcpListener;
 
 mod auth;
@@ -17,29 +17,13 @@ mod state;
 
 use state::AppState;
 
-fn init_telemetry() {
-    use tracing_subscriber::{fmt, EnvFilter};
-
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
-    let log_format = std::env::var("LOG_FORMAT").unwrap_or_default();
-
-    if log_format == "json" {
-        fmt().json().with_env_filter(filter).init();
-    } else {
-        fmt().with_env_filter(filter).init();
-    }
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    init_telemetry();
+    soma_infra::telemetry::init();
 
-    let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL required")?;
-    let bind_addr = std::env::var("SOMA_AUDIT_BIND").unwrap_or_else(|_| "0.0.0.0:8080".into());
-    let ingest_secret =
-        std::env::var("SOMA_AUDIT_INGEST_SECRET").context("SOMA_AUDIT_INGEST_SECRET required")?;
-    let admin_token =
-        std::env::var("SOMA_AUDIT_ADMIN_TOKEN").context("SOMA_AUDIT_ADMIN_TOKEN required")?;
+    let bind_addr = env_or("SOMA_AUDIT_BIND", "0.0.0.0:8080");
+    let ingest_secret = require_env("SOMA_AUDIT_INGEST_SECRET")?;
+    let admin_token = require_env("SOMA_AUDIT_ADMIN_TOKEN")?;
 
     // Comma-separated allowlist of cross-origin dashboard origins. Empty by
     // default — the bundled portal is same-origin, so no permissive CORS.
@@ -52,9 +36,7 @@ async fn main() -> anyhow::Result<()> {
 
     let keys = Arc::new(soma_audit_pg::AuditKeys::from_env()?);
 
-    let pool = PgPoolOptions::new()
-        .min_connections(2)
-        .connect(&database_url)
+    let pool = soma_infra::connect_from_env()
         .await
         .context("failed to connect to database")?;
 
@@ -91,37 +73,12 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("soma-audit-server listening on {bind_addr}");
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async {
+            soma_infra::signal::shutdown_signal().await;
+            tracing::info!("shutdown signal received");
+        })
         .await
         .context("server error")?;
 
     Ok(())
-}
-
-async fn shutdown_signal() {
-    use tokio::signal;
-
-    let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("failed to install signal handler")
-            .recv()
-            .await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
-    }
-
-    tracing::info!("shutdown signal received");
 }
